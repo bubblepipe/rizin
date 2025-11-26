@@ -202,10 +202,10 @@ static Mcs96Op mcs96_op[] = {
 	{ "subc", MCS96_4B | MCS96_2OP },
 	{ "subc", MCS96_3B | MCS96_2OP },
 	{ "subc", MCS96_4B_OR_5B | MCS96_2OP },
-	{ "lbsze", MCS96_3B | MCS96_2OP },
-	{ "lbsze", MCS96_3B | MCS96_2OP },
-	{ "lbsze", MCS96_3B | MCS96_2OP },
-	{ "lbsze", MCS96_4B_OR_5B | MCS96_2OP }, // 0xaf
+	{ "ldbze", MCS96_3B | MCS96_2OP },
+	{ "ldbze", MCS96_3B | MCS96_2OP },
+	{ "ldbze", MCS96_3B | MCS96_2OP },
+	{ "ldbze", MCS96_4B_OR_5B | MCS96_2OP }, // 0xaf
 	{ "ldb", MCS96_3B | MCS96_2OP | MCS96_REG_8 },
 	{ "ldb", MCS96_3B | MCS96_2OP },
 	{ "ldb", MCS96_3B | MCS96_2OP },
