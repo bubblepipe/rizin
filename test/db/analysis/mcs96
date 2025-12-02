@@ -11,21 +11,6 @@ jump: 0x00000012
 EOF
 RUN
 
-# NAME=mcs96 scall
-# FILE=malloc://4096
-# CMDS=<<EOF
-# e asm.arch=mcs96
-# wx 2820
-# ao 1~type,jump,fail,eob
-# EOF
-# EXPECT=<<EOF
-# type: call
-# jump: 0x00000022
-# fail: 0x00000002
-# eob: true
-# EOF
-# RUN
-
 NAME=mcs96 ret
 FILE=malloc://4096
 CMDS=<<EOF
@@ -38,19 +23,6 @@ type: ret
 stackptr: 2
 EOF
 RUN
-
-# NAME=mcs96 push
-# FILE=malloc://4096
-# CMDS=<<EOF
-# e asm.arch=mcs96
-# wx c820
-# ao 1~type,stackptr
-# EOF
-# EXPECT=<<EOF
-# type: push
-# stackptr: 2
-# EOF
-# RUN
 
 NAME=mcs96 pop
 FILE=malloc://4096
