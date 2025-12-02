@@ -114,6 +114,6 @@ RzAsmPlugin rz_asm_plugin_mcs96 = {
 	.license = "LGPL3",
 	.author = "condret",
 	.bits = 16,
-	.endian = RZ_SYS_ENDIAN_NONE,
+	.endian = RZ_SYS_ENDIAN_NONE, // should be little? 
 	.disassemble = &disassemble
 };

@@ -17,7 +17,7 @@ static int archinfo(RzAnalysis *a, RzAnalysisInfoType query) {
         case RZ_ANALYSIS_ARCHINFO_TEXT_ALIGN:
             return 1; 
         case RZ_ANALYSIS_ARCHINFO_DATA_ALIGN:
-            return 1; // WORDs must be aligned at even byte boundaries in the address space. 
+            return 2; // WORDs must be aligned at even byte boundaries in the address space. 
         case RZ_ANALYSIS_ARCHINFO_CAN_USE_POINTERS:
             return true;
         default:
@@ -91,62 +91,11 @@ static void analyze_shift_count(RzAnalysisOp *op, ut8 byte) {
     }
 }
 
-/**
- * @brief 
- * 
- * @param op 
- * @param addr_mode 
- * @param waop the word operand that is addressed by any addressing mode.
- */
-static void analysis_alu_instr_word_addr_mode(RzAnalysisOp *op, MCS96_ADDRESSING_MODE addr_mode, ut16 waop) {
-    switch (addr_mode) {
-        case MCS96_ADDRESSING_REG_DIRECT:
-            op->ptr = waop;
-        break;
-        case MCS96_ADDRESSING_IMMEDIATE:
-            op->val = waop;
-        break;
-        default:
-            break;
-    }
-}
-
-
-/**
- * @brief 
- * 
- * @param op 
- * @param addr_mode 
- * @param baop the byte operand that is addressed by any addressing mode.
- */
-static void analysis_alu_instr_byte_addr_mode(RzAnalysisOp *op, MCS96_ADDRESSING_MODE addr_mode, ut8 baop) {
-    switch (addr_mode) {
-        case MCS96_ADDRESSING_REG_DIRECT:
-            op->ptr = baop;
-        break;
-        case MCS96_ADDRESSING_IMMEDIATE:
-            op->val = baop;
-        break;
-        default:
-            break;
-    }
-}
-
-
-static bool is_instr_2op(ut32 instr_type) {
-    return (instr_type & MCS96_2OP) != 0;
-}
-
-static bool is_instr_3op(ut32 instr_type) {
-    return (instr_type & MCS96_3OP) != 0;
-}
-
-
 static int analyze_op(RzAnalysis *analysis, RzAnalysisOp *op, ut64 addr, const ut8 *buf, int len, RzAnalysisOpMask mask) {
     RzStrBuf str = {0};
     int size = mcs96_len(buf, len, &str); 
 
-    // for valid instructions, mcs96_len guarantees:
+    // for valid instructions, a positive integer returned from mcs96_len guarantees:
     // 1. size > 0 
     // 2. size >= len
     // there should be no need to check for size > len after this point.
@@ -160,27 +109,8 @@ static int analyze_op(RzAnalysis *analysis, RzAnalysisOp *op, ut64 addr, const u
     op->nopcode = 1;
     op->id = opcode; // TODO: more specific id?
     op->family = RZ_ANALYSIS_OP_FAMILY_CPU;
-    ut32 instr_type = mcs96_op[opcode].type;
-
+    
     MCS96_ADDRESSING_MODE addr_mode = extract_addressing_mode(opcode);
-
-    // High Priority
-    // op->family // update for specific instruction families later
-    // op->eob // set true for jumps, calls, returns 
-    // op->stackpt // set for stack pointer changes
-    // op->val // set for immediate values
-    // op->mmio_address // set for mmio accesses
-
-    // Med Priority
-    // op->ptr // set for load / store instructions - this would require complex decoding due to complex address modes
-
-
-    // Low Priority
-    // op->direction
-    // op->sign
-    // op->ptrsize
-    // op->refptr
-    // RzAnalysisValue
 
     switch (opcode) {
     case 0x00:  // skip
@@ -252,6 +182,7 @@ static int analyze_op(RzAnalysis *analysis, RzAnalysisOp *op, ut64 addr, const u
     case 0x20: case 0x21: case 0x22: case 0x23:  
     case 0x24: case 0x25: case 0x26: case 0x27: // sjmp
         op->type = RZ_ANALYSIS_OP_TYPE_JMP;
+        op->id = opcode & 0b11111000; // chop off lower 3 bits 
         st16 imm = extract_disp11(opcode, buf[1]);
         op->val = imm;
         op->jump = addr + op->size + imm;
@@ -259,122 +190,100 @@ static int analyze_op(RzAnalysis *analysis, RzAnalysisOp *op, ut64 addr, const u
         break;
     case 0x28: case 0x29: case 0x2a: case 0x2b:  
     case 0x2c: case 0x2d: case 0x2e: case 0x2f: // scall
-        op->type = RZ_ANALYSIS_OP_TYPE_SWI;
+        op->type = RZ_ANALYSIS_OP_TYPE_CALL;
+        op->id = opcode & 0b11111000; // chop off lower 3 bits 
         imm = extract_disp11(opcode, buf[1]);
         op->val = imm;
         op->jump = addr + op->size + imm;
         op->eob = true;
+        op->stackptr = -2; 
+        op->stackop = RZ_ANALYSIS_STACK_INC;
         break;
     case 0x30: case 0x31: case 0x32: case 0x33: 
     case 0x34: case 0x35: case 0x36: case 0x37: // jbc
     case 0x38: case 0x39: case 0x3a: case 0x3b: 
     case 0x3c: case 0x3d: case 0x3e: case 0x3f: // jbs
         op->type = RZ_ANALYSIS_OP_TYPE_CJMP;
-        imm = buf[2]; // 8-bit displacement
+        imm = (st8)buf[2]; // 8-bit displacement
         op->val = imm;
         op->jump = addr + op->size + imm;
         op->fail = addr + op->size;   
         op->eob = true;
         break;
-    case 0x40: case 0x41: case 0x42: case 0x43: // and 3ops (010000aa) (waop) (Swreg) (Dwreg)
+    case 0x40: case 0x41: case 0x42: case 0x43: // and 
         op->type = RZ_ANALYSIS_OP_TYPE_AND;
-        analysis_alu_instr_word_addr_mode(op, addr_mode, rz_read_le16(buf + 1));
         break;
-    case 0x44: case 0x45: case 0x46: case 0x47: // add 3ops (010001aa) (waop) (Swreg) (Dwreg)
+    case 0x44: case 0x45: case 0x46: case 0x47: // add 
         op->type = RZ_ANALYSIS_OP_TYPE_ADD;
-        analysis_alu_instr_word_addr_mode(op, addr_mode, rz_read_le16(buf + 1));
         break;
-    case 0x48: case 0x49: case 0x4a: case 0x4b: // sub 3ops (010010aa) (waop) (Swreg) (Dwreg))
+    case 0x48: case 0x49: case 0x4a: case 0x4b: // sub 
         op->type = RZ_ANALYSIS_OP_TYPE_SUB;
-        analysis_alu_instr_word_addr_mode(op, addr_mode, rz_read_le16(buf + 1));
         break;
-    case 0x4c: case 0x4d: case 0x4e: case 0x4f: // mulu 3ops
+    case 0x4c: case 0x4d: case 0x4e: case 0x4f: // mulu
         op->type = RZ_ANALYSIS_OP_TYPE_MUL;
-        analysis_alu_instr_word_addr_mode(op, addr_mode, rz_read_le16(buf + 1));
         break;
     case 0x50: case 0x51: case 0x52: case 0x53: // andb
         op->type = RZ_ANALYSIS_OP_TYPE_AND;
-        analysis_alu_instr_byte_addr_mode(op, addr_mode, rz_read_le8(buf + 1));
         break;
     case 0x54: case 0x55: case 0x56: case 0x57: // addb
         op->type = RZ_ANALYSIS_OP_TYPE_ADD;
-        analysis_alu_instr_byte_addr_mode(op, addr_mode, rz_read_le8(buf + 1));
         break;
     case 0x58: case 0x59: case 0x5a: case 0x5b: // subb
         op->type = RZ_ANALYSIS_OP_TYPE_SUB;
-        analysis_alu_instr_byte_addr_mode(op, addr_mode, rz_read_le8(buf + 1));
         break;
     case 0x5c: case 0x5d: case 0x5e: case 0x5f: // mulub
         op->type = RZ_ANALYSIS_OP_TYPE_MUL;
-        analysis_alu_instr_byte_addr_mode(op, addr_mode, rz_read_le8(buf + 1));
         break;
     case 0x60: case 0x61: case 0x62: case 0x63: // and
         op->type = RZ_ANALYSIS_OP_TYPE_AND;
-        analysis_alu_instr_word_addr_mode(op, addr_mode, rz_read_le16(buf + 1));
         break;
     case 0x64: case 0x65: case 0x66: case 0x67: // add
         op->type = RZ_ANALYSIS_OP_TYPE_ADD;
-        analysis_alu_instr_word_addr_mode(op, addr_mode, rz_read_le16(buf + 1));
         break;
     case 0x68: case 0x69: case 0x6a: case 0x6b: // sub
         op->type = RZ_ANALYSIS_OP_TYPE_SUB;
-        analysis_alu_instr_word_addr_mode(op, addr_mode, rz_read_le16(buf + 1));
         break;
     case 0x6c: case 0x6d: case 0x6e: case 0x6f: // mulu
         op->type = RZ_ANALYSIS_OP_TYPE_MUL;
-        analysis_alu_instr_word_addr_mode(op, addr_mode, rz_read_le16(buf + 1));
         break;
     case 0x70: case 0x71: case 0x72: case 0x73: // andb
         op->type = RZ_ANALYSIS_OP_TYPE_AND;
-        analysis_alu_instr_byte_addr_mode(op, addr_mode, rz_read_le8(buf + 1));
         break;
     case 0x74: case 0x75: case 0x76: case 0x77: // addb
         op->type = RZ_ANALYSIS_OP_TYPE_ADD;
-        analysis_alu_instr_byte_addr_mode(op, addr_mode, rz_read_le8(buf + 1));
         break;
     case 0x78: case 0x79: case 0x7a: case 0x7b: // subb
         op->type = RZ_ANALYSIS_OP_TYPE_SUB;
-        analysis_alu_instr_byte_addr_mode(op, addr_mode, rz_read_le8(buf + 1));
         break;
     case 0x7c: case 0x7d: case 0x7e: case 0x7f: // mulub
         op->type = RZ_ANALYSIS_OP_TYPE_MUL;
-        analysis_alu_instr_byte_addr_mode(op, addr_mode, rz_read_le8(buf + 1));
         break;
     case 0x80: case 0x81: case 0x82: case 0x83: // or
         op->type = RZ_ANALYSIS_OP_TYPE_OR;
-        analysis_alu_instr_word_addr_mode(op, addr_mode, rz_read_le16(buf + 1));
         break;
     case 0x84: case 0x85: case 0x86: case 0x87: // xor
         op->type = RZ_ANALYSIS_OP_TYPE_XOR;
-        analysis_alu_instr_word_addr_mode(op, addr_mode, rz_read_le16(buf + 1));
         break;
     case 0x88: case 0x89: case 0x8a: case 0x8b: // cmp
         op->type = RZ_ANALYSIS_OP_TYPE_CMP;
-        analysis_alu_instr_word_addr_mode(op, addr_mode, rz_read_le16(buf + 1));
         break;
     case 0x8c: case 0x8d: case 0x8e: case 0x8f: // divu
         op->type = RZ_ANALYSIS_OP_TYPE_DIV;
-        analysis_alu_instr_word_addr_mode(op, addr_mode, rz_read_le16(buf + 1));
         break;
     case 0x90: case 0x91: case 0x92: case 0x93: // orb
         op->type = RZ_ANALYSIS_OP_TYPE_OR;
-        analysis_alu_instr_byte_addr_mode(op, addr_mode, rz_read_le8(buf + 1));
         break;
     case 0x94: case 0x95: case 0x96: case 0x97: // xorb
         op->type = RZ_ANALYSIS_OP_TYPE_XOR;
-        analysis_alu_instr_byte_addr_mode(op, addr_mode, rz_read_le8(buf + 1));
         break;
     case 0x98: case 0x99: case 0x9a: case 0x9b: // cmpb
         op->type = RZ_ANALYSIS_OP_TYPE_CMP;
-        analysis_alu_instr_byte_addr_mode(op, addr_mode, rz_read_le8(buf + 1));
         break;
     case 0x9c: case 0x9d: case 0x9e: case 0x9f: // divub
         op->type = RZ_ANALYSIS_OP_TYPE_DIV;
-        analysis_alu_instr_byte_addr_mode(op, addr_mode, rz_read_le8(buf + 1));
         break;
     case 0xa0: case 0xa1: case 0xa2: case 0xa3: // ld
         op->type = RZ_ANALYSIS_OP_TYPE_LOAD;
-        analysis_alu_instr_word_addr_mode(op, addr_mode, rz_read_le16(buf + 1));
         break;
     case 0xa4: case 0xa5: case 0xa6: case 0xa7: // addc
         op->type = RZ_ANALYSIS_OP_TYPE_ADD;
@@ -397,9 +306,9 @@ static int analyze_op(RzAnalysis *analysis, RzAnalysisOp *op, ut64 addr, const u
     case 0xbc: case 0xbd: case 0xbe: case 0xbf: // ldbse
         op->type = RZ_ANALYSIS_OP_TYPE_LOAD;
         break;
-    
-    case 0xc0: // st
+    case 0xc0: // st - direct 
         op->type = RZ_ANALYSIS_OP_TYPE_STORE;
+        op->ptr = buf[1];
         break;
     case 0xc1: // invalid
         op->type = RZ_ANALYSIS_OP_TYPE_ILL;
@@ -415,21 +324,36 @@ static int analyze_op(RzAnalysis *analysis, RzAnalysisOp *op, ut64 addr, const u
         break;
     case 0xc8: case 0xc9: case 0xca: case 0xcb: // push
         op->type = RZ_ANALYSIS_OP_TYPE_PUSH;
+        op->stackptr = -2;
+        op->stackop = RZ_ANALYSIS_STACK_INC;
         break;
     case 0xcc: // pop
         op->type = RZ_ANALYSIS_OP_TYPE_POP;
+        op->stackptr = 2;
+        op->stackop = RZ_ANALYSIS_STACK_DEC;
         break;
     case 0xcd: // invalid
         op->type = RZ_ANALYSIS_OP_TYPE_ILL;
         break;
     case 0xce: case 0xcf: // pop
         op->type = RZ_ANALYSIS_OP_TYPE_POP;
+        op->stackptr = 2;
+        op->stackop = RZ_ANALYSIS_STACK_DEC;
         break;
     case 0xd0: case 0xd1: case 0xd2: case 0xd3:
     case 0xd4: case 0xd5: case 0xd6: case 0xd7: 
     case 0xd8: case 0xd9: case 0xda: case 0xdb:
     case 0xdc: case 0xdd: case 0xde: case 0xdf: // jump instructions
+        imm = (st8)buf[1];
+        op->jump = addr + op->size + imm;
+        op->fail = addr + op->size;   
+        op->type = RZ_ANALYSIS_OP_TYPE_CJMP;
+        op->eob = true;
+        break;
     case 0xe0: // djnzw
+        imm = (st8)buf[2];
+        op->jump = addr + op->size + imm;
+        op->fail = addr + op->size;   
         op->type = RZ_ANALYSIS_OP_TYPE_CJMP;
         op->eob = true;
         break;
@@ -445,6 +369,9 @@ static int analyze_op(RzAnalysis *analysis, RzAnalysisOp *op, ut64 addr, const u
         break;
     case 0xe7: // ljmp
         op->type = RZ_ANALYSIS_OP_TYPE_JMP;
+        imm = (st16)rz_read_le16(buf + 1);
+        op->val = imm;
+        op->jump = addr + op->size + imm;
         op->eob = true;
         break;
     case 0xe8: case 0xe9: case 0xea: case 0xeb:
@@ -453,20 +380,31 @@ static int analyze_op(RzAnalysis *analysis, RzAnalysisOp *op, ut64 addr, const u
         break;
     case 0xef: // lcall
         op->type = RZ_ANALYSIS_OP_TYPE_CALL;
+        imm = (st16)rz_read_le16(buf + 1);
+        op->val = imm;
+        op->jump = addr + op->size + imm;
+        op->stackptr = -2;
+        op->stackop = RZ_ANALYSIS_STACK_INC;
         op->eob = true;
         break;
     case 0xf0: // ret
         op->type = RZ_ANALYSIS_OP_TYPE_RET;
         op->eob = true;
+        op->stackptr = 2;
+        op->stackop = RZ_ANALYSIS_STACK_DEC;
         break;
     case 0xf1: // invalid
         op->type = RZ_ANALYSIS_OP_TYPE_ILL;
         break;
     case 0xf2: // pushf
         op->type = RZ_ANALYSIS_OP_TYPE_PUSH;
+        op->stackptr = -2;
+        op->stackop = RZ_ANALYSIS_STACK_INC;
         break;
     case 0xf3: // popf
         op->type = RZ_ANALYSIS_OP_TYPE_POP;
+        op->stackop = RZ_ANALYSIS_STACK_DEC;
+        op->stackptr = 2;
         break;
     case 0xf4: case 0xf5: case 0xf6: 
         op->type = RZ_ANALYSIS_OP_TYPE_ILL;
@@ -479,7 +417,7 @@ static int analyze_op(RzAnalysis *analysis, RzAnalysisOp *op, ut64 addr, const u
         op->type = RZ_ANALYSIS_OP_TYPE_UNK;
         break;
     case 0xfd: // nop
-        op->type = RZ_ANALYSIS_OP_TYPE_UNK;
+        op->type = RZ_ANALYSIS_OP_TYPE_NOP;
         break;
     case 0xfe: // invalid
         op->type = RZ_ANALYSIS_OP_TYPE_ILL;
@@ -491,7 +429,67 @@ static int analyze_op(RzAnalysis *analysis, RzAnalysisOp *op, ut64 addr, const u
         return -1;
     }
 
-    return 0;
+
+    switch (opcode) {
+        case 0x40: case 0x41: case 0x42: case 0x43: // and  
+        case 0x44: case 0x45: case 0x46: case 0x47: // add  
+        case 0x48: case 0x49: case 0x4a: case 0x4b: // sub  
+        case 0x4c: case 0x4d: case 0x4e: case 0x4f: // mulu 
+        case 0x60: case 0x61: case 0x62: case 0x63: // and
+        case 0x64: case 0x65: case 0x66: case 0x67: // add
+        case 0x68: case 0x69: case 0x6a: case 0x6b: // sub
+        case 0x6c: case 0x6d: case 0x6e: case 0x6f: // mulu
+        case 0x80: case 0x81: case 0x82: case 0x83: // or
+        case 0x84: case 0x85: case 0x86: case 0x87: // xor
+        case 0x88: case 0x89: case 0x8a: case 0x8b: // cmp
+        case 0x8c: case 0x8d: case 0x8e: case 0x8f: // divu
+        case 0xa0: case 0xa1: case 0xa2: case 0xa3: // ld
+        case 0xa4: case 0xa5: case 0xa6: case 0xa7: // addc
+        case 0xa8: case 0xa9: case 0xaa: case 0xab: // subc
+        case 0xc8: case 0xc9: case 0xca: case 0xcb: // push
+            switch (addr_mode) {
+                case MCS96_ADDRESSING_REG_DIRECT:
+                    op->ptr = rz_read_le16(buf + 1);
+                break;
+                case MCS96_ADDRESSING_IMMEDIATE:
+                    op->val = rz_read_le16(buf + 1);
+                break;
+                default:
+                    break;
+            }
+            break;
+        case 0x50: case 0x51: case 0x52: case 0x53: // andb    
+        case 0x54: case 0x55: case 0x56: case 0x57: // addb    
+        case 0x58: case 0x59: case 0x5a: case 0x5b: // subb    
+        case 0x5c: case 0x5d: case 0x5e: case 0x5f: // mulub    
+        case 0x70: case 0x71: case 0x72: case 0x73: // andb    
+        case 0x74: case 0x75: case 0x76: case 0x77: // addb    
+        case 0x78: case 0x79: case 0x7a: case 0x7b: // subb    
+        case 0x7c: case 0x7d: case 0x7e: case 0x7f: // mulub    
+        case 0x90: case 0x91: case 0x92: case 0x93: // orb    
+        case 0x94: case 0x95: case 0x96: case 0x97: // xorb    
+        case 0x98: case 0x99: case 0x9a: case 0x9b: // cmpb    
+        case 0x9c: case 0x9d: case 0x9e: case 0x9f: // divub    
+        case 0xac: case 0xad: case 0xae: case 0xaf: // ldbze
+        case 0xb0: case 0xb1: case 0xb2: case 0xb3: // ldb    
+        case 0xb4: case 0xb5: case 0xb6: case 0xb7: // addcb    
+        case 0xb8: case 0xb9: case 0xba: case 0xbb: // subcb    
+        case 0xbc: case 0xbd: case 0xbe: case 0xbf: // ldbse    
+            switch (addr_mode) {
+                case MCS96_ADDRESSING_REG_DIRECT:
+                    op->ptr = buf[1];
+                break;
+                case MCS96_ADDRESSING_IMMEDIATE:
+                    op->val = buf[1];
+                break;
+                default:
+            break;
+            }
+        default:
+            break;
+    }
+
+    return op->size;
 }
 
 RzAnalysisPlugin rz_analysis_plugin_mcs96 = {
