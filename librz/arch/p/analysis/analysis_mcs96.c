@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025 bubblepipe <bubblepipe42@gmail.com>
+// SPDX-License-Identifier: LGPL-3.0-only
+
 #include <string.h>
 #include <rz_types.h>
 #include <rz_lib.h>
@@ -197,7 +200,7 @@ static int analyze_op(RzAnalysis *analysis, RzAnalysisOp *op, ut64 addr, const u
         op->jump = addr + op->size + imm;
         op->eob = true;
         op->stackptr = -2; 
-        op->stackop = RZ_ANALYSIS_STACK_INC;
+        // op->stackop = RZ_ANALYSIS_STACK_INC;
         break;
     case 0x30: case 0x31: case 0x32: case 0x33: 
     case 0x34: case 0x35: case 0x36: case 0x37: // jbc
@@ -325,12 +328,12 @@ static int analyze_op(RzAnalysis *analysis, RzAnalysisOp *op, ut64 addr, const u
     case 0xc8: case 0xc9: case 0xca: case 0xcb: // push
         op->type = RZ_ANALYSIS_OP_TYPE_PUSH;
         op->stackptr = -2;
-        op->stackop = RZ_ANALYSIS_STACK_INC;
+        // op->stackop = RZ_ANALYSIS_STACK_INC;
         break;
     case 0xcc: // pop
         op->type = RZ_ANALYSIS_OP_TYPE_POP;
         op->stackptr = 2;
-        op->stackop = RZ_ANALYSIS_STACK_DEC;
+        // op->stackop = RZ_ANALYSIS_STACK_DEC;
         break;
     case 0xcd: // invalid
         op->type = RZ_ANALYSIS_OP_TYPE_ILL;
@@ -338,7 +341,7 @@ static int analyze_op(RzAnalysis *analysis, RzAnalysisOp *op, ut64 addr, const u
     case 0xce: case 0xcf: // pop
         op->type = RZ_ANALYSIS_OP_TYPE_POP;
         op->stackptr = 2;
-        op->stackop = RZ_ANALYSIS_STACK_DEC;
+        // op->stackop = RZ_ANALYSIS_STACK_DEC;
         break;
     case 0xd0: case 0xd1: case 0xd2: case 0xd3:
     case 0xd4: case 0xd5: case 0xd6: case 0xd7: 
@@ -384,14 +387,14 @@ static int analyze_op(RzAnalysis *analysis, RzAnalysisOp *op, ut64 addr, const u
         op->val = imm;
         op->jump = addr + op->size + imm;
         op->stackptr = -2;
-        op->stackop = RZ_ANALYSIS_STACK_INC;
+        // op->stackop = RZ_ANALYSIS_STACK_INC;
         op->eob = true;
         break;
     case 0xf0: // ret
         op->type = RZ_ANALYSIS_OP_TYPE_RET;
         op->eob = true;
         op->stackptr = 2;
-        op->stackop = RZ_ANALYSIS_STACK_DEC;
+        // op->stackop = RZ_ANALYSIS_STACK_DEC;
         break;
     case 0xf1: // invalid
         op->type = RZ_ANALYSIS_OP_TYPE_ILL;
@@ -399,11 +402,11 @@ static int analyze_op(RzAnalysis *analysis, RzAnalysisOp *op, ut64 addr, const u
     case 0xf2: // pushf
         op->type = RZ_ANALYSIS_OP_TYPE_PUSH;
         op->stackptr = -2;
-        op->stackop = RZ_ANALYSIS_STACK_INC;
+        // op->stackop = RZ_ANALYSIS_STACK_INC;
         break;
     case 0xf3: // popf
         op->type = RZ_ANALYSIS_OP_TYPE_POP;
-        op->stackop = RZ_ANALYSIS_STACK_DEC;
+        // op->stackop = RZ_ANALYSIS_STACK_DEC;
         op->stackptr = 2;
         break;
     case 0xf4: case 0xf5: case 0xf6: 
@@ -450,6 +453,7 @@ static int analyze_op(RzAnalysis *analysis, RzAnalysisOp *op, ut64 addr, const u
             switch (addr_mode) {
                 case MCS96_ADDRESSING_REG_DIRECT:
                     op->ptr = rz_read_le16(buf + 1);
+                    op->refptr = 2;
                 break;
                 case MCS96_ADDRESSING_IMMEDIATE:
                     op->val = rz_read_le16(buf + 1);
@@ -478,6 +482,7 @@ static int analyze_op(RzAnalysis *analysis, RzAnalysisOp *op, ut64 addr, const u
             switch (addr_mode) {
                 case MCS96_ADDRESSING_REG_DIRECT:
                     op->ptr = buf[1];
+                    op->refptr = 1;
                 break;
                 case MCS96_ADDRESSING_IMMEDIATE:
                     op->val = buf[1];
@@ -485,6 +490,7 @@ static int analyze_op(RzAnalysis *analysis, RzAnalysisOp *op, ut64 addr, const u
                 default:
             break;
             }
+            break;
         default:
             break;
     }

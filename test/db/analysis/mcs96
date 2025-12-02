@@ -1,0 +1,106 @@
+NAME=mcs96 sjmp
+FILE=malloc://4096
+CMDS=<<EOF
+e asm.arch=mcs96
+wx 2010
+ao 1~type,jump
+EOF
+EXPECT=<<EOF
+type: jmp
+jump: 0x00000012
+EOF
+RUN
+
+# NAME=mcs96 scall
+# FILE=malloc://4096
+# CMDS=<<EOF
+# e asm.arch=mcs96
+# wx 2820
+# ao 1~type,jump,fail,eob
+# EOF
+# EXPECT=<<EOF
+# type: call
+# jump: 0x00000022
+# fail: 0x00000002
+# eob: true
+# EOF
+# RUN
+
+NAME=mcs96 ret
+FILE=malloc://4096
+CMDS=<<EOF
+e asm.arch=mcs96
+wx f0
+ao 1~type,stackptr
+EOF
+EXPECT=<<EOF
+type: ret
+stackptr: 2
+EOF
+RUN
+
+# NAME=mcs96 push
+# FILE=malloc://4096
+# CMDS=<<EOF
+# e asm.arch=mcs96
+# wx c820
+# ao 1~type,stackptr
+# EOF
+# EXPECT=<<EOF
+# type: push
+# stackptr: 2
+# EOF
+# RUN
+
+NAME=mcs96 pop
+FILE=malloc://4096
+CMDS=<<EOF
+e asm.arch=mcs96
+wx cc10
+ao 1~type,stackptr
+EOF
+EXPECT=<<EOF
+type: pop
+stackptr: 2
+EOF
+RUN
+
+NAME=mcs96 ld direct addressing
+FILE=malloc://4096
+CMDS=<<EOF
+e asm.arch=mcs96
+wx a0010203
+ao 1~type,ptr
+EOF
+EXPECT=<<EOF
+ptr: 0x00000201
+refptr: 2
+type: load
+EOF
+RUN
+
+NAME=mcs96 ld immediate addressing
+FILE=malloc://4096
+CMDS=<<EOF
+e asm.arch=mcs96
+wx a1123412
+ao 1~type,val
+EOF
+EXPECT=<<EOF
+val: 0x00003412
+type: load
+EOF
+RUN
+
+NAME=mcs96 add immediate
+FILE=malloc://4096
+CMDS=<<EOF
+e asm.arch=mcs96
+wx 65123401
+ao 1~type,val
+EOF
+EXPECT=<<EOF
+val: 0x00003412
+type: add
+EOF
+RUN
