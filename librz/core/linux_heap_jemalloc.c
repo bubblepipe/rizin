@@ -117,6 +117,34 @@ static bool GH(rz_resolve_jemalloc)(RzCore *core, char *symname, ut64 *symbol) {
 #endif
 }
 
+/**
+ * \brief Detect jemalloc version by checking for version-specific symbols
+ *
+ * jemalloc 4.x has je_chunksize symbol (chunk-based architecture)
+ * jemalloc 5.x does NOT have je_chunksize (extent-based architecture)
+ */
+static bool GH(rz_jemalloc_detect_version)(RzCore *core) {
+	ut64 chunksize_addr;
+	const char *current_version = rz_config_get(core->config, "dbg.jemalloc.version");
+
+	// Try to resolve je_chunksize - only exists in jemalloc 4.x
+	if (GH(rz_resolve_jemalloc)(core, "je_chunksize", &chunksize_addr)) {
+		// je_chunksize found -> jemalloc 4.x
+		if (strcmp(current_version, "4.5.0") != 0) {
+			rz_config_set(core->config, "dbg.jemalloc.version", "4.5.0");
+			RZ_LOG_INFO("Detected jemalloc 4.x (je_chunksize symbol found)\n");
+		}
+		return true;
+	} else {
+		// je_chunksize not found -> likely jemalloc 5.x
+		if (strcmp(current_version, "5.3.0") != 0) {
+			rz_config_set(core->config, "dbg.jemalloc.version", "5.3.0");
+			RZ_LOG_INFO("Detected jemalloc 5.x (je_chunksize symbol not found)\n");
+		}
+		return true;
+	}
+}
+
 static void GH(jemalloc_get_chunks)(RzCore *core, const char *input) {
 	ut64 cnksz;
 	RzConsPrintablePalette *pal = &rz_cons_singleton()->context->pal;
@@ -487,6 +515,19 @@ static void GH(jemalloc_get_runs)(RzCore *core, const char *input) {
 #endif
 
 static void GH(cmd_dbg_map_jemalloc)(RzCore *core, char dmx_variant, const char *arg) {
+	// Auto-detect jemalloc version if in debug mode (no args = symbol resolution needed)
+	if (!arg || arg[0] == '\0' || arg[0] == '*') {
+		GH(rz_jemalloc_detect_version)(core);
+	}
+
+	// Check if jemalloc 5.3.0 is detected - not yet implemented
+	const char *version = rz_config_get(core->config, "dbg.jemalloc.version");
+	if (version && strcmp(version, "5.3.0") == 0) {
+		RZ_LOG_ERROR("jemalloc 5.3.0 support is not yet implemented\n");
+		RZ_LOG_ERROR("The heap structures changed significantly from 4.x to 5.x (chunks -> extents)\n");
+		return;
+	}
+
 	switch (dmx_variant) {
 	case 'a': // dmxa
 		GH(jemalloc_print_narenas)(core, arg);
