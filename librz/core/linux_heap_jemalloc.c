@@ -4,6 +4,7 @@
 
 #ifndef INCLUDE_HEAP_JEMALLOC_STD_C
 #define INCLUDE_HEAP_JEMALLOC_STD_C
+#include "rz_util/rz_log.h"
 #define HEAP32 1
 #include "linux_heap_jemalloc.c"
 #undef HEAP32
@@ -26,7 +27,6 @@
 #define PFMTx   PFMT64x
 #endif
 
-#if __linux__
 static GHT GH(je_get_va_symbol)(RzCore *core, const char *path, const char *sym_name) {
 	GHT vaddr = GHT_MAX;
 	RzBin *bin = core->bin;
@@ -61,56 +61,64 @@ static GHT GH(je_get_va_symbol)(RzCore *core, const char *path, const char *sym_
 	return vaddr;
 }
 
-#endif
 
 static bool GH(rz_resolve_jemalloc)(RzCore *core, char *symname, ut64 *symbol) {
 	RzListIter *iter;
 	RzDebugMap *map;
-	const char *jemalloc_ver_end = NULL;
+	const char *jemalloc_path = NULL;
 	ut64 jemalloc_addr = UT64_MAX;
+	const char *binary_path = NULL;
+	ut64 binary_addr = UT64_MAX;
 
 	if (!core || !core->dbg || !core->dbg->maps) {
 		return false;
 	}
 	rz_debug_map_sync(core->dbg);
+
 	rz_list_foreach (core->dbg->maps, iter, map) {
 		if (strstr(map->name, "libjemalloc.")) {
 			jemalloc_addr = map->addr;
-			jemalloc_ver_end = map->name;
+			jemalloc_path = map->name;
 			break;
 		}
-	}
-	if (!jemalloc_ver_end) {
-		RZ_LOG_WARN("Is jemalloc mapped in memory? (see dm command)\n");
-		return false;
-	}
-#if __linux__
-	char *path = rz_str_newf("%s", jemalloc_ver_end);
-	if (rz_file_exists(path)) {
-		ut64 vaddr = GH(je_get_va_symbol)(core, path, symname);
-		if (jemalloc_addr != GHT_MAX && vaddr != 0) {
-			*symbol = jemalloc_addr + vaddr;
-			free(path);
-			return true;
+		if (binary_path == NULL && map->perm & RZ_PERM_X) {
+			/* Skip common library patterns */
+			if (!strstr(map->name, ".so") && !strstr(map->name, "lib") &&
+			    !strstr(map->name, "[") && strlen(map->name) > 0) {
+				binary_addr = map->addr;
+				binary_path = map->name;
+			}
 		}
 	}
-	free(path);
-	return false;
-#else
-	(void)jemalloc_addr;
-	RZ_LOG_INFO("Resolving %s from libjemalloc.2... ", symname);
-	// this is quite sloooow, we must optimize dmi
-	char *va = rz_core_cmd_strf(core, "dmi libjemalloc.2 %s$~[1]", symname);
-	ut64 n = rz_num_get(NULL, va);
-	if (n && n != UT64_MAX) {
-		*symbol = n;
-		rz_cons_printf("0x%08" PFMT64x "\n", n);
-	} else {
-		rz_cons_printf("NOT FOUND\n");
+
+	/* Try dynamic library first */
+	if (jemalloc_path) {
+		char *path = rz_str_newf("%s", jemalloc_path);
+		if (rz_file_exists(path)) {
+			GHT vaddr = GH(je_get_va_symbol)(core, path, symname);
+			if (jemalloc_addr != GHT_MAX && vaddr != GHT_MAX) {
+				*symbol = jemalloc_addr + vaddr;
+				free(path);
+				return true;
+			}
+		}
+		free(path);
 	}
-	free(va);
-	return true;
-#endif
+
+	/* Fall back to static linking */
+	if (binary_path) {
+		char *path = rz_str_newf("%s", binary_path);
+		if (rz_file_exists(path)) {
+			GHT vaddr = GH(je_get_va_symbol)(core, path, symname);
+			if (binary_addr != GHT_MAX && vaddr != GHT_MAX) {
+				*symbol = binary_addr + vaddr;
+				free(path);
+				return true;
+			}
+		}
+		free(path);
+	}
+	return false;
 }
 
 /**
@@ -123,25 +131,28 @@ static bool GH(rz_jemalloc_detect_version)(RzCore *core) {
 	ut64 chunksize_addr;
 	const char *current_version = rz_config_get(core->config, "dbg.jemalloc.version");
 
-	// Try to resolve je_chunksize - only exists in jemalloc 4.x
+	// Try to resolve je_chunksize - only exists in jemalloc 4.5.0
 	if (GH(rz_resolve_jemalloc)(core, "je_chunksize", &chunksize_addr)) {
-		// je_chunksize found -> jemalloc 4.x
+		// je_chunksize found -> jemalloc 4.5.0
 		if (strcmp(current_version, "4.5.0") != 0) {
 			rz_config_set(core->config, "dbg.jemalloc.version", "4.5.0");
-			RZ_LOG_INFO("Detected jemalloc 4.x (je_chunksize symbol found)\n");
+			RZ_LOG_INFO("Detected jemalloc 4.5.0 (je_chunksize symbol found)\n");
+		}
+		return true;
+	} else if (GH(rz_resolve_jemalloc)(core, "je_arena_emap_global", &chunksize_addr)) {
+		if (strcmp(current_version, "5.3.0") != 0) {
+			rz_config_set(core->config, "dbg.jemalloc.version", "5.3.0");
+			RZ_LOG_INFO("Detected jemalloc 5.3.0 (je_arena_emap_global symbol found)\n");
 		}
 		return true;
 	} else {
-		// je_chunksize not found -> likely jemalloc 5.x
-		if (strcmp(current_version, "5.3.0") != 0) {
-			rz_config_set(core->config, "dbg.jemalloc.version", "5.3.0");
-			RZ_LOG_INFO("Detected jemalloc 5.x (je_chunksize symbol not found)\n");
-		}
-		return true;
+		rz_config_set(core->config, "dbg.jemalloc.version", "NULL");
+		RZ_LOG_WARN("jemalloc version cannot be determined\n");
+		return false;
 	}
 }
 
-static void GH(jemalloc_get_chunks)(RzCore *core, const char *input) {
+static void GH(jemalloc_get_chunks_450)(RzCore *core, const char *input) {
 	ut64 cnksz;
 	RzConsPrintablePalette *pal = &rz_cons_singleton()->context->pal;
 
@@ -152,17 +163,17 @@ static void GH(jemalloc_get_chunks)(RzCore *core, const char *input) {
 	rz_io_read_at(core->io, cnksz, (ut8 *)&cnksz, sizeof(GHT));
 
 	if (input[0] == '\0') {
-		RZ_LOG_ERROR("need an arena_t to associate chunks\n");
+		RZ_LOG_ERROR("need an arena_t_450 to associate chunks\n");
 	} else if (input[0] != '*') {
 		const char *addr_str = (input[0] == ' ') ? input + 1 : input;
 		GHT arena = GHT_MAX;
-		arena_t *ar = RZ_NEW0(arena_t);
-		extent_node_t *node = RZ_NEW0(extent_node_t), *head = RZ_NEW0(extent_node_t);
+		arena_t_450 *ar = RZ_NEW0(arena_t_450);
+		extent_node_t_450 *node = RZ_NEW0(extent_node_t_450), *head = RZ_NEW0(extent_node_t_450);
 		arena = rz_num_math(core->num, addr_str);
 
 		if (arena) {
-			rz_io_read_at(core->io, arena, (ut8 *)ar, sizeof(arena_t));
-			rz_io_read_at(core->io, (GHT)(size_t)ar->achunks.qlh_first, (ut8 *)head, sizeof(extent_node_t));
+			rz_io_read_at(core->io, arena, (ut8 *)ar, sizeof(arena_t_450));
+			rz_io_read_at(core->io, (GHT)(size_t)ar->achunks.qlh_first, (ut8 *)head, sizeof(extent_node_t_450));
 			if (head->en_addr) {
 				PRINT_YA("   Chunk - start: ");
 				PRINTF_BA("0x%08" PFMT64x, (ut64)(size_t)head->en_addr);
@@ -170,7 +181,7 @@ static void GH(jemalloc_get_chunks)(RzCore *core, const char *input) {
 				PRINTF_BA("0x%08" PFMT64x, (ut64)head->en_addr + cnksz);
 				PRINT_YA(", size: ");
 				PRINTF_BA("0x%08" PFMT64x "\n", (ut64)cnksz);
-				rz_io_read_at(core->io, (ut64)(size_t)head->ql_link.qre_next, (ut8 *)node, sizeof(extent_node_t));
+				rz_io_read_at(core->io, (ut64)(size_t)head->ql_link.qre_next, (ut8 *)node, sizeof(extent_node_t_450));
 				while (node && node->en_addr != head->en_addr) {
 					PRINT_YA("   Chunk - start: ");
 					PRINTF_BA("0x%08" PFMT64x, (ut64)(size_t)node->en_addr);
@@ -178,7 +189,7 @@ static void GH(jemalloc_get_chunks)(RzCore *core, const char *input) {
 					PRINTF_BA("0x%" PFMT64x, (ut64)node->en_addr + cnksz);
 					PRINT_YA(", size: ");
 					PRINTF_BA("0x%08" PFMT64x "\n", cnksz);
-					rz_io_read_at(core->io, (ut64)(size_t)node->ql_link.qre_next, (ut8 *)node, sizeof(extent_node_t));
+					rz_io_read_at(core->io, (ut64)(size_t)node->ql_link.qre_next, (ut8 *)node, sizeof(extent_node_t_450));
 				}
 			}
 		}
@@ -189,12 +200,12 @@ static void GH(jemalloc_get_chunks)(RzCore *core, const char *input) {
 		int i = 0;
 		ut64 sym;
 		GHT arenas = GHT_MAX, arena = GHT_MAX;
-		arena_t *ar = RZ_NEW0(arena_t);
-		extent_node_t *node = RZ_NEW0(extent_node_t);
-		extent_node_t *head = RZ_NEW0(extent_node_t);
+		arena_t_450 *ar = RZ_NEW0(arena_t_450);
+		extent_node_t_450 *node = RZ_NEW0(extent_node_t_450);
+		extent_node_t_450 *head = RZ_NEW0(extent_node_t_450);
 
 		if (!node || !head) {
-			RZ_LOG_ERROR("Failed to allocate extent_node_t\n");
+			RZ_LOG_ERROR("Failed to allocate extent_node_t_450\n");
 			free(ar);
 			free(node);
 			free(head);
@@ -209,8 +220,8 @@ static void GH(jemalloc_get_chunks)(RzCore *core, const char *input) {
 					break;
 				}
 				PRINTF_GA("arenas[%d]: @ 0x%" PFMTx " { \n", i++, (GHT)arena);
-				rz_io_read_at(core->io, arena, (ut8 *)ar, sizeof(arena_t));
-				rz_io_read_at(core->io, (GHT)(size_t)ar->achunks.qlh_first, (ut8 *)head, sizeof(extent_node_t));
+				rz_io_read_at(core->io, arena, (ut8 *)ar, sizeof(arena_t_450));
+				rz_io_read_at(core->io, (GHT)(size_t)ar->achunks.qlh_first, (ut8 *)head, sizeof(extent_node_t_450));
 				if (head->en_addr != 0) {
 					PRINT_YA("   Chunk - start: ");
 					PRINTF_BA("0x%08" PFMT64x, (ut64)(size_t)head->en_addr);
@@ -219,7 +230,7 @@ static void GH(jemalloc_get_chunks)(RzCore *core, const char *input) {
 					PRINT_YA(", size: ");
 					PRINTF_BA("0x%08" PFMT64x "\n", (ut64)cnksz);
 					ut64 addr = (ut64)(size_t)head->ql_link.qre_next;
-					rz_io_read_at(core->io, addr, (ut8 *)node, sizeof(extent_node_t));
+					rz_io_read_at(core->io, addr, (ut8 *)node, sizeof(extent_node_t_450));
 					while (node && head && node->en_addr != head->en_addr) {
 						PRINT_YA("   Chunk - start: ");
 						PRINTF_BA("0x%08" PFMT64x, (ut64)(size_t)node->en_addr);
@@ -227,7 +238,7 @@ static void GH(jemalloc_get_chunks)(RzCore *core, const char *input) {
 						PRINTF_BA("0x%" PFMT64x, (ut64)node->en_addr + cnksz);
 						PRINT_YA(", size: ");
 						PRINTF_BA("0x%" PFMT64x "\n", cnksz);
-						rz_io_read_at(core->io, (GHT)(size_t)node->ql_link.qre_next, (ut8 *)node, sizeof(extent_node_t));
+						rz_io_read_at(core->io, (GHT)(size_t)node->ql_link.qre_next, (ut8 *)node, sizeof(extent_node_t_450));
 					}
 				}
 				PRINT_GA("}\n");
@@ -239,15 +250,15 @@ static void GH(jemalloc_get_chunks)(RzCore *core, const char *input) {
 	}
 }
 
-static void GH(jemalloc_print_narenas)(RzCore *core, const char *input) {
+static void GH(jemalloc_print_narenas_450)(RzCore *core, const char *input) {
 	ut64 symaddr;
 	ut64 arenas;
 	GHT arena = GHT_MAX;
-	arena_t *ar = RZ_NEW0(arena_t);
+	arena_t_450 *ar = RZ_NEW0(arena_t_450);
 	if (!ar) {
 		return;
 	}
-	arena_stats_t *stats = RZ_NEW0(arena_stats_t);
+	GH(arena_stats_t_450) *stats = RZ_NEW0(GH(arena_stats_t_450));
 	if (!stats) {
 		free(ar);
 		return;
@@ -293,9 +304,9 @@ static void GH(jemalloc_print_narenas)(RzCore *core, const char *input) {
 		// Handle address argument (with or without leading space)
 		const char *addr_str = (input[0] == ' ') ? input + 1 : input;
 		arena = rz_num_math(core->num, addr_str);
-		rz_io_read_at(core->io, (GHT)arena, (ut8 *)ar, sizeof(arena_t));
+		rz_io_read_at(core->io, (GHT)arena, (ut8 *)ar, sizeof(arena_t_450));
 		PRINT_GA("struct arena_s {\n");
-#define OO(x) (ut64)(arena + rz_offsetof(arena_t, x))
+#define OO(x) (ut64)(arena + rz_offsetof(arena_t_450, x))
 		PRINTF_BA("  ind = 0x%x\n", ar->ind);
 		PRINTF_BA("  nthreads: application allocation = 0x%" PFMT64x "\n", (ut64)ar->nthreads[0]);
 		PRINTF_BA("  nthreads: internal metadata allocation = 0x%" PFMT64x "\n", (ut64)ar->nthreads[1]);
@@ -336,20 +347,20 @@ static void GH(jemalloc_print_narenas)(RzCore *core, const char *input) {
 }
 
 // Helper to print bin info for a single arena
-static void GH(jemalloc_print_arena_bins)(RzCore *core, GHT arena, ut64 bin_info, RzConsPrintablePalette *pal) {
+static void GH(jemalloc_print_arena_bins_450)(RzCore *core, GHT arena, ut64 bin_info, RzConsPrintablePalette *pal) {
 	int j;
-	arena_t *ar = RZ_NEW0(arena_t);
-	arena_bin_info_t *b = RZ_NEW0(arena_bin_info_t);
+	arena_t_450 *ar = RZ_NEW0(arena_t_450);
+	arena_bin_info_t_450 *b = RZ_NEW0(arena_bin_info_t_450);
 	if (!ar || !b) {
 		free(ar);
 		free(b);
 		return;
 	}
 
-	rz_io_read_at(core->io, arena, (ut8 *)ar, sizeof(arena_t));
+	rz_io_read_at(core->io, arena, (ut8 *)ar, sizeof(arena_t_450));
 	for (j = 0; j < JM_NBINS; j++) {
-		rz_io_read_at(core->io, (GHT)(bin_info + j * sizeof(arena_bin_info_t)),
-			(ut8 *)b, sizeof(arena_bin_info_t));
+		rz_io_read_at(core->io, (GHT)(bin_info + j * sizeof(arena_bin_info_t_450)),
+			(ut8 *)b, sizeof(arena_bin_info_t_450));
 		PRINT_YA("    {\n");
 		PRINT_YA("       regsize : ");
 		PRINTF_BA("0x%" PFMT64x "\n", (ut64)b->reg_size);
@@ -369,7 +380,7 @@ static void GH(jemalloc_print_arena_bins)(RzCore *core, GHT arena, ut64 bin_info
 	free(b);
 }
 
-static void GH(jemalloc_get_bins)(RzCore *core, const char *input) {
+static void GH(jemalloc_get_bins_450)(RzCore *core, const char *input) {
 	int i = 0;
 	ut64 bin_info;
 	ut64 arenas;
@@ -391,7 +402,7 @@ static void GH(jemalloc_get_bins)(RzCore *core, const char *input) {
 					break;
 				}
 				PRINTF_YA("  arenas[%d]: @ 0x%" PFMTx " {\n", i++, (GHT)arena);
-				GH(jemalloc_print_arena_bins)(core, arena, bin_info, pal);
+				GH(jemalloc_print_arena_bins_450)(core, arena, bin_info, pal);
 				PRINT_YA("  }\n");
 			}
 		}
@@ -414,101 +425,35 @@ static void GH(jemalloc_get_bins)(RzCore *core, const char *input) {
 		bin_info = rz_num_math(core->num, bin_info_str);
 
 		PRINTF_GA("arena_t @ 0x%" PFMT64x " bins[%d] {\n", (ut64)arena, JM_NBINS);
-		GH(jemalloc_print_arena_bins)(core, arena, bin_info, pal);
+		GH(jemalloc_print_arena_bins_450)(core, arena, bin_info, pal);
 		PRINT_GA("}\n");
 
 		free(args);
 	}
 }
-#if 0
-static void GH(jemalloc_get_runs)(RzCore *core, const char *input) {
-	switch (input[0]) {
-	case ' ':
-		{
-			int pageind;
-			ut64 npages, chunksize_mask, map_bias, map_misc_offset, chunk, mapbits;;
-			arena_chunk_t *c = RZ_NEW0 (arena_chunk_t);
 
-			if (!c) {
-				RZ_LOG_ERROR ("Cannot call calloc\n");
-				return;
-			}
-
-			input += 1;
-			chunk = rz_num_math (core->num, input);
-
-			if (!GH(rz_resolve_jemalloc)(core, "je_chunk_npages", &npages)) {
-				RZ_LOG_ERROR ("Cannot resolve je_chunk_npages\n");
-				return;
-			}
-			if (!GH(rz_resolve_jemalloc)(core, "je_chunksize_mask", &chunksize_mask)) {
-				RZ_LOG_ERROR ("Cannot resolve je_chunksize_mask\n");
-				return;
-			}
-			if (!GH(rz_resolve_jemalloc)(core, "je_map_bias", &map_bias)) {
-				RZ_LOG_ERROR ("Cannot resolve je_map_bias\n");
-				return;
-			}
-			if (!GH(rz_resolve_jemalloc)(core, "je_map_misc_offset", &map_misc_offset)) {
-				RZ_LOG_ERROR ("Cannot resolve je_map_misc_offset\n");
-				return;
-			}
-
-			rz_io_read_at (core->io, npages, (ut8*)&npages, sizeof (GHT));
-			rz_io_read_at (core->io, chunksize_mask, (ut8*)&chunksize_mask, sizeof (GHT));
-			rz_io_read_at (core->io, map_bias, (ut8*)&map_bias, sizeof (GHT));
-			rz_io_read_at (core->io, map_misc_offset, (ut8*)&map_misc_offset, sizeof (GHT));
-
-			rz_cons_printf ("map_misc_offset 0x%08"PFMT64x"\n", (ut64)map_misc_offset);
-
-			rz_io_read_at (core->io, chunk, (ut8 *)c, sizeof (arena_chunk_t));
-			mapbits = *(GHT *)&c->map_bits;
-			rz_cons_printf ("map_bits: 0x%08"PFMT64x"\n", (ut64)mapbits);
-
-			uint32_t offset = rz_offsetof (arena_chunk_t, map_bits);
-
-			arena_chunk_map_bits_t *dwords = (void *)calloc (sizeof (arena_chunk_map_bits_t), npages);
-			rz_io_read_at (core->io, chunk + offset, (ut8*)dwords, sizeof (arena_chunk_map_bits_t) * npages);
-			rz_cons_printf ("map_bits @ 0x%08"PFMT64x"\n", (ut64)(chunk + offset));
-
-			arena_run_t *r = RZ_NEW0 (arena_run_t);
-			if (!r) {
-				RZ_LOG_ERROR ("Cannot call calloc\n");
-				return;
-			}
-			for (pageind = map_bias; pageind < npages; pageind++) {
-				arena_chunk_map_bits_t mapelm = dwords[pageind-map_bias];
-				if (mapelm.bits & CHUNK_MAP_ALLOCATED) {
-					// ut64 elm = ((arena_chunk_map_misc_t *)((uintptr_t)chunk + (uintptr_t)map_misc_offset) + pageind-map_bias);
-					ut64 elm = chunk + map_misc_offset + pageind-map_bias;
-					rz_cons_printf ("\nelm: 0x%"PFMT64x"\n", elm);
-					arena_chunk_map_misc_t *m = RZ_NEW0 (arena_chunk_map_misc_t);
-					if (m) {
-						ut64 run = elm + rz_offsetof (arena_chunk_map_misc_t, run);
-						rz_io_read_at (core->io, elm, (ut8*)m, sizeof (arena_chunk_map_misc_t));
-						rz_cons_printf ("Small run @ 0x%08"PFMT64x"\n", (ut64)elm);
-						rz_io_read_at (core->io, run, (ut8*)r, sizeof (arena_run_t));
-						rz_cons_printf ("binind: 0x%08"PFMT64x"\n", (ut64)r->binind);
-						rz_cons_printf ("nfree: 0x%08"PFMT64x"\n", (ut64)r->nfree);
-						rz_cons_printf ("bitmap: 0x%08"PFMT64x"\n\n", (ut64)*(GHT*)r->bitmap);
-						free (m);
-					}
-				} else if (mapelm.bits & CHUNK_MAP_LARGE) {
-					ut64 run = (ut64) (size_t) chunk + (pageind << LG_PAGE);
-					rz_cons_printf ("Large run @ 0x%08"PFMT64x"\n", run);
-					rz_io_read_at (core->io, run, (ut8*)r, sizeof (arena_run_t));
-					rz_cons_printf ("binind: 0x%08"PFMT64x"\n", (ut64)r->binind);
-					rz_cons_printf ("nfree: 0x%08"PFMT64x"\n", (ut64)r->nfree);
-					rz_cons_printf ("bitmap: 0x%08"PFMT64x"\n\n", (ut64)*(GHT*)r->bitmap);
-				}
-			}
-			free (c);
-			free (r);
-         	}
-	break;
-	}
+static void GH(jemalloc_find_extent_530)(RzCore *core, const char *input) {
+	RZ_LOG_WARN("dmxe 530\n");
+	return;
 }
-#endif
+
+static void GH(jemalloc_extent_info_530)(RzCore *core, const char *input) {
+	RZ_LOG_WARN("dmxei 530\n");
+	return;
+}
+
+static void GH(jemalloc_get_bins_530)(RzCore *core, const char *input) {
+	RZ_LOG_WARN("dmxb 530\n");
+	return;	
+}
+
+static void GH(jemalloc_print_narenas_530)(RzCore *core, const char *input) {
+	RZ_LOG_WARN("dmxa 530\n");
+	return;
+	
+}
+
+
 
 static void GH(cmd_dbg_map_jemalloc)(RzCore *core, char dmx_variant, const char *arg) {
 	// Auto-detect jemalloc version if in debug mode (no args = symbol resolution needed)
@@ -516,23 +461,36 @@ static void GH(cmd_dbg_map_jemalloc)(RzCore *core, char dmx_variant, const char 
 		GH(rz_jemalloc_detect_version)(core);
 	}
 
-	// Check if jemalloc 5.3.0 is detected - not yet implemented
 	const char *version = rz_config_get(core->config, "dbg.jemalloc.version");
-	if (version && strcmp(version, "5.3.0") == 0) {
-		RZ_LOG_ERROR("jemalloc 5.3.0 support is not yet implemented\n");
-		RZ_LOG_ERROR("The heap structures changed significantly from 4.x to 5.x (chunks -> extents)\n");
-		return;
-	}
-
-	switch (dmx_variant) {
-	case 'a': // dmxa
-		GH(jemalloc_print_narenas)(core, arg);
-		break;
-	case 'b': // dmxb
-		GH(jemalloc_get_bins)(core, arg);
-		break;
-	case 'c': // dmxc
-		GH(jemalloc_get_chunks)(core, arg);
-		break;
+	if (version && strcmp(version, "4.5.0") == 0) {
+		switch (dmx_variant) {
+		case 'a': // dmxa
+			GH(jemalloc_print_narenas_450)(core, arg);
+			break;
+		case 'b': // dmxb
+			GH(jemalloc_get_bins_450)(core, arg);
+			break;
+		case 'c': // dmxc
+			GH(jemalloc_get_chunks_450)(core, arg);
+			break;
+		}
+	} 
+	else if (version && strcmp(version, "5.3.0") == 0) {
+		switch (dmx_variant) {
+		case 'a': // dmxa - print arena
+			GH(jemalloc_print_narenas_530)(core, arg);
+			break;
+		case 'b': // dmxb - bin info
+			GH(jemalloc_get_bins_530)(core, arg);
+			break;
+		case 'e': // dmxe - find extent for malloc'd address
+			GH(jemalloc_find_extent_530)(core, arg);
+			break;
+		case 'i': // dmxei - extent info
+			GH(jemalloc_extent_info_530)(core, arg);
+			break;
+		}
+	} else {
+		RZ_LOG_ERROR("Unknown jemalloc version. Please set dbg.jemalloc.version to '4.5.0' or '5.3.0'\n");
 	}
 }
