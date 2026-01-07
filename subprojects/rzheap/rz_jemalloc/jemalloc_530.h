@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 jemalloc <https://jemalloc.net/>
 // SPDX-FileCopyrightText: 2026 bubblepipe <bubblepipe42@gmail.com>
 // SPDX-License-Identifier: LGPL-3.0-only
 
@@ -10,9 +11,9 @@
 
 #undef GH_ALIGN
 #ifdef GH_IS_64
-#define GH_ALIGN __attribute__((aligned(8)))
+#define GH_ALIGN RZ_ALIGNED(8)
 #else
-#define GH_ALIGN __attribute__((aligned(4)))
+#define GH_ALIGN RZ_ALIGNED(4)
 #endif
 
 
@@ -72,12 +73,12 @@ typedef struct GH_ALIGN {                  \
 } GH(a_prefix##_t_530);
 
 /* Opaque types - internal layout doesn't matter, only size and alignment */
-typedef struct __attribute__((aligned(4))) { ut8 data[88]; } malloc_mutex_t_530_32; 
-typedef struct __attribute__((aligned(8))) { ut8 data[112]; } malloc_mutex_t_530_64;
-typedef struct __attribute__((aligned(4))) { ut8 data[68]; } slab_data_t_530_32;
-typedef struct __attribute__((aligned(8))) { ut8 data[64]; } slab_data_t_530_64;
-typedef struct __attribute__((aligned(4))) { ut8 data[20]; } e_prof_info_t_530_32;
-typedef struct __attribute__((aligned(8))) { ut8 data[32]; } e_prof_info_t_530_64;
+typedef struct RZ_ALIGNED(4) { ut8 data[88]; } malloc_mutex_t_530_32; 
+typedef struct RZ_ALIGNED(8) { ut8 data[112]; } malloc_mutex_t_530_64;
+typedef struct RZ_ALIGNED(4) { ut8 data[68]; } slab_data_t_530_32;
+typedef struct RZ_ALIGNED(8) { ut8 data[64]; } slab_data_t_530_64;
+typedef struct RZ_ALIGNED(4) { ut8 data[20]; } e_prof_info_t_530_32;
+typedef struct RZ_ALIGNED(8) { ut8 data[32]; } e_prof_info_t_530_64;
 
 #define MALLOCX_ARENA_BITS 12
 #define EDATA_ALIGNMENT 128

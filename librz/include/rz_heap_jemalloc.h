@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2025 bubblepipe <bubblepipe42@gmail.com>
+// SPDX-FileCopyrightText: 2026 bubblepipe <bubblepipe42@gmail.com>
 
 // Allow re-entry for 32-bit pass
 #if !defined(RZ_HEAP_JEMALLOC_H_TYPES) || defined(INC_HEAP32)
@@ -6,8 +6,8 @@
 #ifndef INC_HEAP32
 // First pass: 64-bit
 #define GH(x) x##_64
-typedef ut64 __attribute__((aligned(8))) GHT_64;
-typedef st64 __attribute__((aligned(8))) GHST_64;
+typedef ut64 RZ_ALIGNED(8) GHT_64;
+typedef st64 RZ_ALIGNED(8) GHST_64;
 #define GHT      GHT_64
 #define GHT_MAX  UT64_MAX
 #define GHST     GHST_64
@@ -20,8 +20,8 @@ typedef st64 __attribute__((aligned(8))) GHST_64;
 #undef GHST
 #undef GH_IS_64
 #define GH(x)   x##_32
-typedef ut32 __attribute__((aligned(4))) GHT_32;
-typedef st32 __attribute__((aligned(4))) GHST_32;
+typedef ut32 RZ_ALIGNED(4) GHT_32;
+typedef st32 RZ_ALIGNED(4) GHST_32;
 #define GHT     GHT_32
 #define GHT_MAX UT32_MAX
 #define GHST    GHST_32

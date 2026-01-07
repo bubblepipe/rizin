@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: 2025 jemalloc <https://jemalloc.net/>
-// SPDX-FileCopyrightText: 2025 bubblepipe <bubblepipe42@gmail.com>
+// SPDX-FileCopyrightText: 2026 jemalloc <https://jemalloc.net/>
+// SPDX-FileCopyrightText: 2026 bubblepipe <bubblepipe42@gmail.com>
 // SPDX-License-Identifier: LGPL-3.0-only
 
 /**
@@ -30,9 +30,9 @@
  */
 #undef GH_ALIGN
 #ifdef GH_IS_64
-#define GH_ALIGN __attribute__((aligned(8)))
+#define GH_ALIGN RZ_ALIGNED(8)
 #else
-#define GH_ALIGN __attribute__((aligned(4)))
+#define GH_ALIGN RZ_ALIGNED(4)
 #endif
 
 /* Queue/list helper macros - pointers become GHT */
@@ -59,16 +59,16 @@ typedef enum {
  * Note: We use __attribute__((aligned(N))) because ut64 only has 4-byte
  * alignment on 32-bit hosts, so we can't rely on natural alignment.
  */
-typedef struct __attribute__((aligned(4))) { ut8 data[44]; } malloc_mutex_t_450_32;
-typedef struct __attribute__((aligned(8))) { ut8 data[80]; } malloc_mutex_t_450_64;
-typedef struct __attribute__((aligned(4))) { ut8 data[8]; } nstime_t_450_32;
-typedef struct __attribute__((aligned(8))) { ut8 data[8]; } nstime_t_450_64;
-typedef struct __attribute__((aligned(4))) { ut8 data[112]; } prof_tctx_t_450_32;
-typedef struct __attribute__((aligned(8))) { ut8 data[128]; } prof_tctx_t_450_64;
-typedef struct __attribute__((aligned(4))) { ut8 data[96]; } arena_stats_t_450_32;
-typedef struct __attribute__((aligned(8))) { ut8 data[128]; } arena_stats_t_450_64;
-typedef struct __attribute__((aligned(4))) { ut8 data[116]; } arena_bin_t_450_32;
-typedef struct __attribute__((aligned(8))) { ut8 data[168]; } arena_bin_t_450_64;
+typedef struct RZ_ALIGNED(4) { ut8 data[44]; } malloc_mutex_t_450_32;
+typedef struct RZ_ALIGNED(8) { ut8 data[80]; } malloc_mutex_t_450_64;
+typedef struct RZ_ALIGNED(4) { ut8 data[8]; } nstime_t_450_32;
+typedef struct RZ_ALIGNED(8) { ut8 data[8]; } nstime_t_450_64;
+typedef struct RZ_ALIGNED(4) { ut8 data[112]; } prof_tctx_t_450_32;
+typedef struct RZ_ALIGNED(8) { ut8 data[128]; } prof_tctx_t_450_64;
+typedef struct RZ_ALIGNED(4) { ut8 data[96]; } arena_stats_t_450_32;
+typedef struct RZ_ALIGNED(8) { ut8 data[128]; } arena_stats_t_450_64;
+typedef struct RZ_ALIGNED(4) { ut8 data[116]; } arena_bin_t_450_32;
+typedef struct RZ_ALIGNED(8) { ut8 data[168]; } arena_bin_t_450_64;
 #endif
 
 typedef struct GH(arena_runs_dirty_link_s_450) GH(arena_runs_dirty_link_t_450);
