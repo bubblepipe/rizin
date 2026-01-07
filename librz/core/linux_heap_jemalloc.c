@@ -5,6 +5,7 @@
 #ifndef INCLUDE_HEAP_JEMALLOC_STD_C
 #define INCLUDE_HEAP_JEMALLOC_STD_C
 #include "rz_util/rz_log.h"
+#include "time.h"
 #define HEAP32 1
 #include "linux_heap_jemalloc.c"
 #undef HEAP32
@@ -12,19 +13,24 @@
 
 #undef GH
 #undef GHT
+#undef GHST
 #undef GHT_MAX
 #undef PFMTx
+#undef GH_IS_64
 
 #if HEAP32
 #define GH(x)   x##_32
 #define GHT     ut32
+#define GHST    st32
 #define GHT_MAX UT32_MAX
 #define PFMTx   PFMT32x
 #else
 #define GH(x)   x##_64
 #define GHT     ut64
+#define GHST    st64
 #define GHT_MAX UT64_MAX
 #define PFMTx   PFMT64x
+#define GH_IS_64
 #endif
 
 static GHT GH(je_get_va_symbol)(RzCore *core, const char *path, const char *sym_name) {
@@ -61,7 +67,6 @@ static GHT GH(je_get_va_symbol)(RzCore *core, const char *path, const char *sym_
 	return vaddr;
 }
 
-
 static bool GH(rz_resolve_jemalloc)(RzCore *core, char *symname, ut64 *symbol) {
 	RzListIter *iter;
 	RzDebugMap *map;
@@ -77,14 +82,14 @@ static bool GH(rz_resolve_jemalloc)(RzCore *core, char *symname, ut64 *symbol) {
 
 	rz_list_foreach (core->dbg->maps, iter, map) {
 		if (strstr(map->name, "libjemalloc.")) {
-			jemalloc_addr = map->addr;
-			jemalloc_path = map->name;
-			break;
+			if (jemalloc_addr == UT64_MAX || map->addr < jemalloc_addr) {
+				jemalloc_addr = map->addr;
+				jemalloc_path = map->name;
+			}
 		}
-		if (binary_path == NULL && map->perm & RZ_PERM_X) {
-			/* Skip common library patterns */
-			if (!strstr(map->name, ".so") && !strstr(map->name, "lib") &&
-			    !strstr(map->name, "[") && strlen(map->name) > 0) {
+		if (!strstr(map->name, ".so") && !strstr(map->name, "lib") &&
+			!strstr(map->name, "[") && strlen(map->name) > 0) {
+			if (binary_addr == UT64_MAX || map->addr < binary_addr) {
 				binary_addr = map->addr;
 				binary_path = map->name;
 			}
@@ -432,28 +437,174 @@ static void GH(jemalloc_get_bins_450)(RzCore *core, const char *input) {
 	}
 }
 
+static GHT GH(rtree_leaf_elm_bits_edata_get)(GHT bits) {
+	if (bits == 0) {
+		return 0;
+	}
+
+	// 64-bit: RTREE_NHIB = 64 - 48 = 16
+	// 32-bit: RTREE_NHIB = 32 - 32 = 0
+	ut32 rtree_nhib = (sizeof(GHT) == 8) ? 16 : 0;
+
+	/* pwndbg algorithm:
+	 * ls = (val << RTREE_NHIB) & ((2**64) - 1)
+	 * ptr = ((ls >> RTREE_NHIB) >> 1) << 1
+	 * ptr = ptr & ~(EDATA_ALIGNMENT - 1)  // align to 128 bytes
+	 */
+	GHT ls = bits << rtree_nhib;
+	GHT ptr = ((ls >> rtree_nhib) >> 1) << 1;
+	ptr = ptr & ~((GHT)128 - 1);
+	return ptr;
+}
+
+static void GH(jemalloc_print_extent_info)(RzCore *core, GHT edata_addr, RzConsPrintablePalette *pal) {
+	GH(edata_t_530)
+	edata;
+	static const char *state_names[] = { "Active", "Dirty", "Muzzy", "Retained" };
+
+	if (!rz_io_read_at(core->io, edata_addr, (ut8 *)&edata, sizeof(edata))) {
+		RZ_LOG_ERROR("Failed to read edata at 0x%" PFMTx "\n", edata_addr);
+		return;
+	}
+
+	ut64 e_bits = edata.e_bits;
+	GHT e_addr = edata.e_addr;
+	GHT e_size = edata.e_size_esn & ~((GHT)(1 << LG_PAGE) - 1);
+	ut32 state = (e_bits & EDATA_BITS_STATE_MASK) >> EDATA_BITS_STATE_SHIFT;
+	bool slab = (e_bits & EDATA_BITS_SLAB_MASK) >> EDATA_BITS_SLAB_SHIFT;
+
+	PRINT_YA("Extent @ ");
+	PRINTF_BA("0x%" PFMTx "\n", edata_addr);
+	PRINT_YA("  Allocated Address: ");
+	PRINTF_BA("0x%" PFMTx "\n", e_addr);
+	PRINT_YA("  Size: ");
+	PRINTF_BA("0x%" PFMTx "\n", e_size);
+	PRINT_YA("  Small class (slab): ");
+	PRINTF_BA("%s\n", slab ? "true" : "false");
+	PRINT_YA("  State: ");
+	PRINTF_BA("%s\n", state < 4 ? state_names[state] : "Unknown");
+}
+
+static void GH(jemalloc_enumerate_extents_530)(RzCore *core, GHT rtree_addr) {
+	RzConsPrintablePalette *pal = &rz_cons_singleton()->context->pal;
+	HtUU *seen_extents = ht_uu_new();
+	if (!seen_extents) {
+		RZ_LOG_ERROR("Failed to allocate hash table\n");
+		return;
+	}
+
+	// rtree_t has: base (GHT) + init_lock (malloc_mutex_t) + root[]
+	GHT root_offset = sizeof(GHT) + sizeof(GH(malloc_mutex_t_530));
+	GHT root_addr = rtree_addr + root_offset;
+
+	// 64-bit: LG_VADDR=48, LG_PAGE=12, RTREE_NSB=36, HEIGHT=2 -> 36/2=18 -> 262144
+	// 32-bit: LG_VADDR=32, LG_PAGE=12, RTREE_NSB=20, HEIGHT=2 -> 20/2=10 -> 1024
+	ut32 rtree_nsb = (sizeof(GHT) == 8) ? 36 : 20;
+	ut32 max_subkeys = 1U << (rtree_nsb / 2);
+	ut32 extent_count = 0;
+
+	PRINT_GA("Enumerating extents from rtree...\n");
+
+	// Level 1: iterate through root nodes
+	for (ut32 i = 0; i < max_subkeys; i++) {
+		GH(rtree_node_elm_t_530)
+		node;
+		GHT node_addr = root_addr + i * sizeof(GH(rtree_node_elm_t_530));
+
+		if (!rz_io_read_at(core->io, node_addr, (ut8 *)&node, sizeof(node))) {
+			continue;
+		}
+
+		GHT leaf_base = node.child;
+		if (leaf_base == 0) {
+			continue;
+		}
+
+		// Level 2: iterate through leaf nodes
+		for (ut32 j = 0; j < max_subkeys; j++) {
+			GH(rtree_leaf_elm_t_530)
+			leaf;
+			GHT leaf_addr = leaf_base + j * sizeof(GH(rtree_leaf_elm_t_530));
+
+			if (!rz_io_read_at(core->io, leaf_addr, (ut8 *)&leaf, sizeof(leaf))) {
+				continue;
+			}
+
+#ifdef GH_IS_64
+			// 64-bit uses compact leaf format with le_bits
+			GHT le_bits = leaf.le_bits;
+			if (le_bits == 0) {
+				continue;
+			}
+			GHT edata_addr = GH(rtree_leaf_elm_bits_edata_get)(le_bits);
+#else
+			// 32-bit uses non-compact format with direct le_edata pointer
+			GHT edata_addr = leaf.le_edata;
+#endif
+
+			if (edata_addr == 0) {
+				continue;
+			}
+
+			// Skip duplicates
+			bool found = false;
+			ht_uu_find(seen_extents, edata_addr, &found);
+			if (found) {
+				continue;
+			}
+			ht_uu_insert(seen_extents, edata_addr, 1);
+
+			GH(jemalloc_print_extent_info)(core, edata_addr, pal);
+			rz_cons_printf("\n");
+			extent_count++;
+		}
+	}
+
+	PRINTF_GA("Total extents found: %u\n", extent_count);
+	ht_uu_free(seen_extents);
+}
+
 static void GH(jemalloc_find_extent_530)(RzCore *core, const char *input) {
-	RZ_LOG_WARN("dmxe 530\n");
-	return;
+	ut64 je_arena_emap_global_addr;
+
+	if (input[0] == '\0') {
+		/* No argument: enumerate all extents */
+		if (GH(rz_resolve_jemalloc)(core, "je_arena_emap_global", &je_arena_emap_global_addr)) {
+			GH(jemalloc_enumerate_extents_530)(core, (GHT)je_arena_emap_global_addr);
+		} else {
+			RZ_LOG_ERROR("Cannot resolve je_arena_emap_global\n");
+		}
+	} else {
+		/* Address argument: lookup single address in rtree (TODO) */
+		const char *addr_str = (input[0] == ' ') ? input + 1 : input;
+		GHT lookup_addr = rz_num_math(core->num, addr_str);
+		RZ_LOG_WARN("Single address lookup not yet implemented for 0x%" PFMTx "\n", lookup_addr);
+	}
 }
 
 static void GH(jemalloc_extent_info_530)(RzCore *core, const char *input) {
-	RZ_LOG_WARN("dmxei 530\n");
-	return;
+	RzConsPrintablePalette *pal = &rz_cons_singleton()->context->pal;
+
+	if (input[0] == '\0') {
+		RZ_LOG_ERROR("Usage: dmxei <edata_addr>\n");
+		return;
+	}
+
+	const char *addr_str = (input[0] == ' ') ? input + 1 : input;
+	GHT edata_addr = rz_num_math(core->num, addr_str);
+
+	GH(jemalloc_print_extent_info)(core, edata_addr, pal);
 }
 
 static void GH(jemalloc_get_bins_530)(RzCore *core, const char *input) {
 	RZ_LOG_WARN("dmxb 530\n");
-	return;	
+	return;
 }
 
 static void GH(jemalloc_print_narenas_530)(RzCore *core, const char *input) {
 	RZ_LOG_WARN("dmxa 530\n");
 	return;
-	
 }
-
-
 
 static void GH(cmd_dbg_map_jemalloc)(RzCore *core, char dmx_variant, const char *arg) {
 	// Auto-detect jemalloc version if in debug mode (no args = symbol resolution needed)
@@ -474,8 +625,7 @@ static void GH(cmd_dbg_map_jemalloc)(RzCore *core, char dmx_variant, const char 
 			GH(jemalloc_get_chunks_450)(core, arg);
 			break;
 		}
-	} 
-	else if (version && strcmp(version, "5.3.0") == 0) {
+	} else if (version && strcmp(version, "5.3.0") == 0) {
 		switch (dmx_variant) {
 		case 'a': // dmxa - print arena
 			GH(jemalloc_print_narenas_530)(core, arg);

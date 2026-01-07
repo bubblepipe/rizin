@@ -44,8 +44,8 @@
 #define RZ_JM_RB_NODE(a_type) struct GH_ALIGN { GHT rbn_left; GHT rbn_right; }
 
 /* only define once */
-#ifndef RZ_JM_DEFINE_ONLY_ONCE
-#define RZ_JM_DEFINE_ONLY_ONCE
+#ifndef RZ_JM_DEFINE_ONLY_ONCE_450
+#define RZ_JM_DEFINE_ONLY_ONCE_450
 typedef enum {
 	dss_prec_disabled  = 0,
 	dss_prec_primary   = 1,
