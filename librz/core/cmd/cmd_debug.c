@@ -11,8 +11,6 @@
 #define TN_KEY_LEN 32
 #define TN_KEY_FMT "%" PFMT64u
 
-#include "rz_heap_glibc.h"
-
 #if HAVE_JEMALLOC
 #include "rz_heap_jemalloc.h"
 #include "../linux_heap_jemalloc.c"
