@@ -873,21 +873,33 @@ RZ_IPI RzCmdStatus rz_cmd_debug_dump_maps_handler(RzCore *core, int argc, const 
 }
 
 // dmda
-// TODO: dont work
+// tested working 
+// [0x00000000]> dmda
+// WARNING: core: Dumped 4096 byte(s) into 0x56149dfaf000-0x56149dfb0000-r--.dmp
+// WARNING: core: Dumped 4096 byte(s) into 0x56149dfb0000-0x56149dfb1000-r-x.dmp
+// WARNING: core: Dumped 4096 byte(s) into 0x56149dfb1000-0x56149dfb2000-r--.dmp
+// WARNING: core: Dumped 4096 byte(s) into 0x56149dfb2000-0x56149dfb3000-r--.dmp
+// WARNING: core: Dumped 4096 byte(s) into 0x56149dfb3000-0x56149dfb4000-r--.dmp
+// WARNING: core: Dumped 8192 byte(s) into 0x7f582fa2e000-0x7f582fa30000-r--.dmp
+// WARNING: core: Dumped 151552 byte(s) into 0x7f582fa31000-0x7f582fa56000-r--.dmp
 RZ_IPI RzCmdStatus rz_cmd_debug_dump_maps_all_handler(RzCore *core, int argc, const char **argv) {
-	if (!file_is_core_dump(core)){
-		CMD_CHECK_DEBUG_DEAD(core);
+	if (file_is_core_dump(core)){
+		dump_io_maps(core, 0, NULL);
+		return RZ_CMD_STATUS_OK;
 	}
+	CMD_CHECK_DEBUG_DEAD(core);
 	dump_maps(core, 0, NULL);
 	return RZ_CMD_STATUS_OK;
 }
 
 // dmdw
-// TODO: dont work 
+// should be working, but there is nothing writable in core dump mode
 RZ_IPI RzCmdStatus rz_cmd_debug_dump_maps_writable_handler(RzCore *core, int argc, const char **argv) {
-	if (!file_is_core_dump(core)){
-		CMD_CHECK_DEBUG_DEAD(core);
+	if (file_is_core_dump(core)){
+		dump_io_maps(core, RZ_PERM_RW, NULL);
+		return RZ_CMD_STATUS_OK;
 	}
+	CMD_CHECK_DEBUG_DEAD(core);
 	dump_maps(core, RZ_PERM_RW, NULL);
 	return RZ_CMD_STATUS_OK;
 }
