@@ -676,6 +676,82 @@ static void cmd_debug_modules(RzCore *core, RzCmdStateOutput *state) { // "dmm"
 	rz_list_free(list);
 }
 
+// IO maps looks like this:
+//  5 fd: 3 +0x00004000 0x56149dfb3000 - 0x56149dfb3fff r-- fmap./home/florian/dev/crash/crash-linux-x86_64
+//  6 fd: 3 +0x00005000 0x7f582fa2e000 - 0x7f582fa2ffff r-- fmap.LOAD5
+//  7 fd: 6 +0x00000000 0x7f582fa31000 - 0x7f582fa55fff r-- mmap./usr/lib/libc-2.33.so
+static const char *io_map_file_path(const RzIOMap *map) { // "dmm"
+	if (!map->name) {
+		return NULL;
+	}
+	const char *name = map->name;
+	// strip the "fmap.", "mmap.", "vmap." prefix from an IO map name
+	if (rz_str_startswith(name, "fmap.")) {
+		name += 5;
+	} else if (rz_str_startswith(name, "mmap.")) {
+		name += 5;
+	} else if (rz_str_startswith(name, "vmap.")) {
+		name += 5;
+	} else {
+		return NULL;
+	}
+	// only take absolute paths
+	if (*name != '/') {
+		return NULL;
+	}
+	return name;
+}
+
+static RzPVector /*<RzIOMap *>*/ *rz_io_modules_list(RzCore *core) { // "dmm"
+	RzPVector *maps = rz_io_maps(core->io);
+	RzPVector *modules = rz_pvector_new(NULL);
+	if (!modules) {
+		return NULL;
+	}
+	char *lastname = NULL;
+	void **it;
+	rz_pvector_foreach (maps, it) {
+		RzIOMap *map = *it;
+		const char *file = io_map_file_path(map);
+		if (!file) {
+			continue;
+		}
+		if (!lastname || strcmp(lastname, file)) {
+			rz_pvector_push(modules, map);
+			free(lastname);
+			lastname = rz_str_dup(file);
+		}
+	}
+	free(lastname);
+	return modules;
+}
+
+static void cmd_io_modules(RzCore *core, RzCmdStateOutput *state) { // "dmm"
+	RzIOMap *map;
+	RzPVector *list;
+	void **it;
+	PJ *pj = state->d.pj;
+	RzOutputMode mode = state->mode;
+	rz_cmd_state_output_array_start(state);
+
+	list = rz_io_modules_list(core);
+	rz_pvector_foreach (list, it) {
+		map = *it;
+		if (mode == RZ_OUTPUT_MODE_STANDARD) {
+			rz_cons_printf("0x%08" PFMT64x " 0x%08" PFMT64x "  %s\n", map->itv.addr, map->itv.addr + map->itv.size, map->name);
+		} else if (mode == RZ_OUTPUT_MODE_JSON) {
+			/* Escape backslashes (e.g. for Windows). */
+			pj_o(pj);
+			pj_kn(pj, "addr", map->itv.addr);
+			pj_kn(pj, "addr_end", map->itv.addr + map->itv.size);
+			pj_ks(pj, "name", map->name);
+			pj_end(pj);
+		}
+	}
+	rz_cmd_state_output_array_end(state);
+	rz_pvector_free(list);
+}
+
 static ut64 addroflib(RzCore *core, const char *libname) {
 	RzListIter *iter;
 	RzDebugMap *map;
@@ -778,11 +854,17 @@ RZ_IPI RzCmdStatus rz_cmd_debug_allocate_maps_handler(RzCore *core, int argc, co
 }
 
 // dmm
-// TODO: dont work
+// tested working 
+// [0x00000000]> dmm
+// 0x56149dfaf000 0x56149dfb0000  fmap./home/florian/dev/crash/crash-linux-x86_64
+// 0x7f582fa31000 0x7f582fa56000  mmap./usr/lib/libc-2.33.so
+// 0x7f582fc4c000 0x7f582fc4d000  fmap./usr/lib/ld-2.33.so
 RZ_IPI RzCmdStatus rz_cmd_debug_modules_handler(RzCore *core, int argc, const char **argv, RzCmdStateOutput *state) {
-	if (!file_is_core_dump(core)) {
-		CMD_CHECK_DEBUG_DEAD(core);
+	if (file_is_core_dump(core)) {
+		cmd_io_modules(core, state);
+		return RZ_CMD_STATUS_OK;
 	}
+	CMD_CHECK_DEBUG_DEAD(core);
 	cmd_debug_modules(core, state);
 	return RZ_CMD_STATUS_OK;
 }
@@ -921,15 +1003,24 @@ static RzDebugMap *get_debug_map_from_lib_name(RzCore *core, const char *lib_nam
 
 // TODO: dont work 
 RZ_IPI RzCmdStatus rz_cmd_debug_dmi_handler(RzCore *core, int argc, const char **argv, RzCmdStateOutput *state) {
-	if (!file_is_core_dump(core)){
-		CMD_CHECK_DEBUG_DEAD(core);
-	}
+
 	if (argc == 1) {
 		// Effectively an alias for 'dmm'
+		if (file_is_core_dump(core)){
+			cmd_io_modules(core, state);
+			rz_cmd_state_output_print(state);
+			rz_cons_flush();
+			return RZ_CMD_STATUS_OK;
+		}
+		CMD_CHECK_DEBUG_DEAD(core);
 		cmd_debug_modules(core, state);
 		rz_cmd_state_output_print(state);
 		rz_cons_flush();
 		return RZ_CMD_STATUS_OK;
+	}
+
+	if (!file_is_core_dump(core)){
+		CMD_CHECK_DEBUG_DEAD(core);
 	}
 
 	const char *lib_name = argc >= 2 ? argv[1] : NULL;
