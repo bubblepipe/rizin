@@ -1088,12 +1088,12 @@ static void resolve_tcache_perthread(RZ_NONNULL RzCore *core, const RzHeapConfig
 RZ_API RZ_OWN bool resolve_heap_tcache(RZ_NONNULL RzCore *core, ut64 arena_base, const RzHeapConfig *config) {
 	RzDebug *dbg = core->dbg;
 
-	if (dbg->threads) {
+	if (rz_config_get_b(core->config, "cfg.debug") && dbg->threads) {
 		resolve_tcache_perthread(core, config);
 		return true;
 	}
 
-	// Only main thread is present
+	// Only main thread is present, or non-debug mode (core dump / file)
 	RzList *bins = rz_heap_tcache_content_internal(core, arena_base, config);
 	print_tcache(core, bins, NULL, 0, config);
 
@@ -2248,9 +2248,7 @@ RzList /*<RzHeapChunkListItem *>*/ *rz_heap_chunks_list_internal(RzCore *core, M
 		rz_heap_get_brks(core, &brk_start, &brk_end);
 		if (tcache) {
 			initial_brk = ((brk_start >> 12) << 12) + config->chunk_hdr_size;
-			if (rz_config_get_b(core->config, "cfg.debug")) {
-				tcache_initial_brk = initial_brk;
-			}
+			tcache_initial_brk = initial_brk;
 			initial_brk += config->tcache.struct_size;
 		} else {
 			initial_brk = (brk_start >> 12) << 12;
@@ -2305,8 +2303,8 @@ RzList /*<RzHeapChunkListItem *>*/ *rz_heap_chunks_list_internal(RzCore *core, M
 		if (fastbin) {
 			int i = (size_tmp / (ptr_size * 2)) - 2;
 			ut64 idx = (ut64)main_arena->fastbinsY[i];
-			if (!rz_glibc_read_chunk(core->io, idx, &cnk, config)) {
-				continue;
+			if (!idx || !rz_glibc_read_chunk(core->io, idx, &cnk, config)) {
+				goto skip_fastbin;
 			}
 			ut64 next = rz_heap_get_next_pointer(core, idx, cnk.fd, config);
 			if (prev_chunk == idx && idx && !next) {
@@ -2320,7 +2318,7 @@ RzList /*<RzHeapChunkListItem *>*/ *rz_heap_chunks_list_internal(RzCore *core, M
 						break;
 					}
 					if (!rz_glibc_read_chunk(core->io, next, &cnk_next, config)) {
-						continue;
+						break;
 					}
 					ut64 next_node = rz_heap_get_next_pointer(core, next, cnk_next.fd, config);
 					// avoid triple while?
@@ -2330,7 +2328,7 @@ RzList /*<RzHeapChunkListItem *>*/ *rz_heap_chunks_list_internal(RzCore *core, M
 							break;
 						}
 						if (!rz_glibc_read_chunk(core->io, next_node, &cnk_next, config)) {
-							continue;
+							break;
 						}
 						next_node = rz_heap_get_next_pointer(core, next_node, cnk_next.fd, config);
 					}
@@ -2339,10 +2337,11 @@ RzList /*<RzHeapChunkListItem *>*/ *rz_heap_chunks_list_internal(RzCore *core, M
 					}
 				}
 				if (!rz_glibc_read_chunk(core->io, next, &cnk, config)) {
-					continue;
+					break;
 				}
 				next = rz_heap_get_next_pointer(core, next, cnk.fd, config);
 			}
+		skip_fastbin:
 			if (double_free) {
 				PRINT_RA(" Double free in simple-linked list detected ");
 				break;
