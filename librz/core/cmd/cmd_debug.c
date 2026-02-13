@@ -737,14 +737,18 @@ static void cmd_io_modules(RzCore *core, RzCmdStateOutput *state) { // "dmm"
 	list = rz_io_modules_list(core);
 	rz_pvector_foreach (list, it) {
 		map = *it;
+		const char *file = io_map_file_path(map);
+		if (!file) {
+			file = map->name;
+		}
 		if (mode == RZ_OUTPUT_MODE_STANDARD) {
-			rz_cons_printf("0x%08" PFMT64x " 0x%08" PFMT64x "  %s\n", map->itv.addr, map->itv.addr + map->itv.size, map->name);
+			rz_cons_printf("0x%08" PFMT64x " 0x%08" PFMT64x "  %s\n", map->itv.addr, map->itv.addr + map->itv.size, file);
 		} else if (mode == RZ_OUTPUT_MODE_JSON) {
 			/* Escape backslashes (e.g. for Windows). */
 			pj_o(pj);
 			pj_kn(pj, "addr", map->itv.addr);
 			pj_kn(pj, "addr_end", map->itv.addr + map->itv.size);
-			pj_ks(pj, "name", map->name);
+			pj_ks(pj, "name", file);
 			pj_end(pj);
 		}
 	}
@@ -790,6 +794,58 @@ static RzDebugMap *get_closest_map(RzCore *core, ut64 addr) {
 			return map;
 		}
 	}
+	return NULL;
+}
+
+// TODO: this function is vibe coded. 
+static ut64 addroflib_io(RzCore *core, const char *libname) {
+	if (!core || !libname) {
+		return UT64_MAX;
+	}
+	// Search modules first
+	RzPVector *modules = rz_io_modules_list(core);
+	void **it;
+	rz_pvector_foreach (modules, it) {
+		RzIOMap *map = *it;
+		const char *file = io_map_file_path(map);
+		if (file && strstr(rz_file_basename(file), libname)) {
+			ut64 addr = map->itv.addr;
+			rz_pvector_free(modules);
+			return addr;
+		}
+	}
+	rz_pvector_free(modules);
+	// Fall back to all IO maps
+	RzPVector *maps = rz_io_maps(core->io);
+	rz_pvector_foreach (maps, it) {
+		RzIOMap *map = *it;
+		const char *file = io_map_file_path(map);
+		if (file && strstr(rz_file_basename(file), libname)) {
+			return map->itv.addr;
+		}
+	}
+	return UT64_MAX;
+}
+
+// TODO: this function is vibe coded. 
+static RzIOMap *get_io_map_from_lib_name(RzCore *core, const char *lib_name) {
+	ut64 addr = addroflib_io(core, rz_file_basename(lib_name));
+	if (addr == UT64_MAX) {
+		RZ_LOG_ERROR("Unknown library '%s' not found\n", lib_name);
+		return NULL;
+	}
+	// Find the IO map containing this address
+	RzPVector *maps = rz_io_maps(core->io);
+	void **it;
+	rz_pvector_foreach (maps, it) {
+		RzIOMap *map = *it;
+		ut64 map_addr = map->itv.addr;
+		ut64 map_end = map_addr + map->itv.size;
+		if (addr >= map_addr && addr < map_end) {
+			return map;
+		}
+	}
+	RZ_LOG_ERROR("Didn't find library map at 0x%" PFMT64x "\n", addr);
 	return NULL;
 }
 
@@ -1001,7 +1057,19 @@ static RzDebugMap *get_debug_map_from_lib_name(RzCore *core, const char *lib_nam
 	return map;
 }
 
-// TODO: dont work 
+// [0x00000000]> dmi
+// file_is_core_dump: true
+// 0x56149dfaf000 0x56149dfb0000  /home/florian/dev/crash/crash-linux-x86_64
+// 0x7f582fa31000 0x7f582fa56000  /usr/lib/libc-2.33.so
+// 0x7f582fc4c000 0x7f582fc4d000  /usr/lib/ld-2.33.so
+// [0x00000000]> dmi /home/florian/dev/crash/crash-linux-x86_64 
+// [Symbols]
+// nth      paddr          vaddr bind   type   size lib name                                                                 
+// --------------------------------------------------------------------------------------------------------------------------
+//   1 0x000005b8 0x56149dfaf5b8 LOCAL  SECT      0     .init
+//   2 0x00001020 0x56149dfc0020 LOCAL  SECT      0     .data
+//   1 0x00000238 0x56149dfaf238 LOCAL  SECT      0     .interp
+// tested working 
 RZ_IPI RzCmdStatus rz_cmd_debug_dmi_handler(RzCore *core, int argc, const char **argv, RzCmdStateOutput *state) {
 
 	if (argc == 1) {
@@ -1019,16 +1087,29 @@ RZ_IPI RzCmdStatus rz_cmd_debug_dmi_handler(RzCore *core, int argc, const char *
 		return RZ_CMD_STATUS_OK;
 	}
 
-	if (!file_is_core_dump(core)){
-		CMD_CHECK_DEBUG_DEAD(core);
-	}
-
 	const char *lib_name = argc >= 2 ? argv[1] : NULL;
 	const char *sym_name = argc == 3 ? argv[2] : NULL;
-
 	RzCoreBinFilter filter = { .offset = UT64_MAX, .name = sym_name };
 	int action = RZ_CORE_BIN_ACC_SYMBOLS;
+	
+	if (file_is_core_dump(core)){
+		RzIOMap *map = get_io_map_from_lib_name(core, lib_name);
+		if (!map) {
+			RZ_LOG_ERROR("Failed to get map from %s\n", lib_name);
+			return RZ_CMD_STATUS_ERROR;
+		}
+		const char *file = io_map_file_path(map);
+		if (!file) {
+			file = map->name;
+		}
+		if (!get_bin_info(core, file, map->itv.addr, state, action, &filter)) {
+			RZ_LOG_ERROR("Failed to get binary information for map: '%s' in file: '%s'\n", map->name, file);
+			return RZ_CMD_STATUS_ERROR;
+		}
+		return RZ_CMD_STATUS_OK;
+	}
 
+	CMD_CHECK_DEBUG_DEAD(core);
 	RzDebugMap *map = get_debug_map_from_lib_name(core, lib_name);
 	if (!map) {
 		RZ_LOG_ERROR("Failed to get map from %s\n", lib_name);
