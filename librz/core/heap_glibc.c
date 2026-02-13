@@ -1088,12 +1088,12 @@ static void resolve_tcache_perthread(RZ_NONNULL RzCore *core, const RzHeapConfig
 RZ_API RZ_OWN bool resolve_heap_tcache(RZ_NONNULL RzCore *core, ut64 arena_base, const RzHeapConfig *config) {
 	RzDebug *dbg = core->dbg;
 
-	if (rz_config_get_b(core->config, "cfg.debug") && dbg->threads) {
+	if (dbg->threads) {
 		resolve_tcache_perthread(core, config);
 		return true;
 	}
-
-	// Only main thread is present, or non-debug mode (core dump / file)
+	
+	// Only main thread is present
 	RzList *bins = rz_heap_tcache_content_internal(core, arena_base, config);
 	print_tcache(core, bins, NULL, 0, config);
 
