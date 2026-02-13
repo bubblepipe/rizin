@@ -1299,13 +1299,24 @@ RZ_IPI RzCmdStatus rz_debug_memory_permission_handler(RzCore *core, int argc, co
 	return RZ_CMD_STATUS_OK;
 }
 
-// TODO: dont work 
+// tested working
+// [0x00000000]> dmS
+// file_is_core_dump: true
+// WARNING: Neither hash nor gnu_hash exist. Falling back to heuristics for deducing the number of dynamic symbols...
+// WARNING: Neither hash nor gnu_hash exist. Falling back to heuristics for deducing the number of dynamic symbols...
+// WARNING: Neither hash nor gnu_hash exist. Falling back to heuristics for deducing the number of dynamic symbols...
+// rz_core: Cannot open file '/usr/lib/libc-2.33.so'
+// rz_core: Cannot open file '/usr/lib/ld-2.33.so'
+// [Sections]
+//      paddr  size          vaddr vsize align perm name                                  type       flags         
+// ----------------------------------------------------------------------------------------------------------------
+// 0x00000000   0x0     ----------   0x0   0x0 ---- crash-linux-x86_64.                   NULL       
+// 0x00000238  0x1b 0x56149dfaf238  0x1b   0x0 -r-- crash-linux-x86_64..interp            PROGBITS   alloc
+// 0x00000254  0x24 0x56149dfaf254  0x24   0x0 -r-- crash-linux-x86_64..note.gnu.build-id NOTE       alloc
+// 0x00000278  0x20 0x56149dfaf278  0x20   0x0 -r-- crash-linux-x86_64..note.ABI-tag      NOTE       alloc
+// 0x00000298  0x1c 0x56149dfaf298  0x1c   0x0 -r-- crash-linux-x86_64..gnu.hash          GNU_HASH   alloc
 RZ_IPI RzCmdStatus rz_cmd_debug_dmS_handler(RzCore *core, int argc, const char **argv, RzOutputMode m) {
-	if (!file_is_core_dump(core)) {
-		CMD_CHECK_DEBUG_DEAD(core);
-	}
 	RzListIter *iter;
-	RzDebugMap *map;
 	ut64 addr;
 	const char *libname = NULL, *sectname = NULL;
 	ut64 baddr = 0LL;
@@ -1324,6 +1335,46 @@ RZ_IPI RzCmdStatus rz_cmd_debug_dmS_handler(RzCore *core, int argc, const char *
 			libname = argv[1];
 		}
 	}
+
+	if (file_is_core_dump(core)) {
+		RzPVector *maps = rz_io_modules_list(core);
+		void **iter;
+		rz_pvector_foreach (maps, iter) {
+			RzIOMap *map = *iter;
+			ut64 map_addr = map->itv.addr;
+			ut64 map_end = map_addr + map->itv.size;
+			if ((!libname ||
+					(addr != UT64_MAX && (addr >= map_addr && addr < map_end)) ||
+					(libname != NULL && (strstr(map->name, libname))))) {
+				baddr = map_addr;
+				char *res;
+				const char *file = io_map_file_path(map);
+				if (!file) {
+					file = map->name;
+				}
+				char *name = rz_str_escape((char *)rz_file_basename(file));
+				char *filesc = rz_str_escape(file);
+				if (sectname) {
+					char *sect = rz_str_escape(sectname);
+					res = rz_sys_cmd_strf("env RZ_BIN_PREFIX=\"%s\" rz-bin -B 0x%08" PFMT64x " -S \"%s\" | grep \"%s\"", name, baddr, filesc, sect);
+					free(sect);
+				} else {
+					res = rz_sys_cmd_strf("env RZ_BIN_PREFIX=\"%s\" rz-bin -B 0x%08" PFMT64x " -S \"%s\"", name, baddr, filesc);
+				}
+				free(filesc);
+				rz_cons_println(res);
+				free(name);
+				free(res);
+				if (libname || addr != UT64_MAX) { // only single match requested
+					break;
+				}
+			}
+		}
+		return RZ_CMD_STATUS_OK;
+	}
+
+	CMD_CHECK_DEBUG_DEAD(core);
+	RzDebugMap *map;
 	rz_debug_map_sync(core->dbg); // update process memory maps
 	RzList *list = rz_debug_modules_list(core->dbg);
 	rz_list_foreach (list, iter, map) {
