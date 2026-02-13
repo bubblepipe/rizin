@@ -726,6 +726,26 @@ static RzPVector /*<RzIOMap *>*/ *rz_io_modules_list(RzCore *core) { // "dmm"
 	return modules;
 }
 
+static void cmd_io_current_modules(RzCore *core, RzOutputMode mode) { // "dmm"
+	ut64 addr = core->offset;
+	RzPVector *list = rz_io_modules_list(core);
+	void **it;
+	rz_pvector_foreach (list, it) {
+		RzIOMap *map = *it;
+		ut64 map_addr = map->itv.addr;
+		ut64 map_end = map_addr + map->itv.size;
+		if (!(addr >= map_addr && addr < map_end)) {
+			continue;
+		}
+		const char *file = io_map_file_path(map);
+		if (!file) {
+			file = map->name;
+		}
+		rz_cons_printf("0x%08" PFMT64x " 0x%08" PFMT64x "  %s\n", map_addr, map_end, file);
+	}
+	rz_pvector_free(list);
+}
+
 static void cmd_io_modules(RzCore *core, RzCmdStateOutput *state) { // "dmm"
 	RzIOMap *map;
 	RzPVector *list;
@@ -926,11 +946,20 @@ RZ_IPI RzCmdStatus rz_cmd_debug_modules_handler(RzCore *core, int argc, const ch
 }
 
 // dmm.
-// TODO: dont work 
+// tested working 
+// [0xffff9e8af000]> dm
+//  1 fd: 3 +0x00002000 0x56149dfaf000 - 0x56149dfaffff r-- fmap./home/florian/dev/crash/crash-linux-x86_64
+//  2 fd: 4 +0x00000000 0x56149dfb0000 - 0x56149dfb0fff r-x mmap./home/florian/dev/crash/crash-linux-x86_64 
+// [0xffff9e8af000]> s 0x56149dfaf000
+// [0x56149dfaf000]> dmm.
+// file_is_core_dump: true
+// 0x56149dfaf000 0x56149dfb0000  /home/florian/dev/crash/crash-linux-x86_64
 RZ_IPI RzCmdStatus rz_cmd_debug_current_modules_handler(RzCore *core, int argc, const char **argv, RzOutputMode mode) {
-	if (!file_is_core_dump(core)) {
-		CMD_CHECK_DEBUG_DEAD(core);
+	if (file_is_core_dump(core)) {
+		cmd_io_current_modules(core, mode);
+		return RZ_CMD_STATUS_OK;
 	}
+	CMD_CHECK_DEBUG_DEAD(core);
 	cmd_debug_current_modules(core, mode);
 	return RZ_CMD_STATUS_OK;
 }
