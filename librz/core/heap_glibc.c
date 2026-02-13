@@ -13,6 +13,7 @@
 #include <rz_heap_glibc.h>
 #include <rz_debug.h>
 #include <math.h>
+#include <stdio.h>
 #include "core_private.h"
 
 void print_heap_chunk_simple(RzCore *core, ut64 chunk, const char *status, PJ *pj, const RzHeapConfig *config);
@@ -150,6 +151,11 @@ static inline ut64 rz_heap_get_next_pointer(RzCore *core, ut64 pos, ut64 next, c
 		: next;
 }
 
+// from test/db/archos/linux-arm64/dbg_dmh
+RZ_IPI bool rz_heap_is_map_name_libc(const char *map_name) {
+	return strstr(map_name, "/libc-") || strstr(map_name, "/libc.");
+}
+
 static ut64 rz_heap_get_main_arena_with_symbol(RzCore *core, RzDebugMap *map) {
 	rz_return_val_if_fail(core && map, UT64_MAX);
 	ut64 base_addr = map->addr;
@@ -205,6 +211,51 @@ beach:
 	free(path);
 	return main_arena;
 }
+
+// IO maps looks like this:
+//  5 fd: 3 +0x00004000 0x56149dfb3000 - 0x56149dfb3fff r-- fmap./home/florian/dev/crash/crash-linux-x86_64
+//  6 fd: 3 +0x00005000 0x7f582fa2e000 - 0x7f582fa2ffff r-- fmap.LOAD5
+//  7 fd: 6 +0x00000000 0x7f582fa31000 - 0x7f582fa55fff r-- mmap./usr/lib/libc-2.33.so
+static const char *io_map_file_path(const RzIOMap *map) { // "dmm"
+	if (!map->name) {
+		return NULL;
+	}
+	const char *name = map->name;
+	// strip the "fmap.", "mmap.", "vmap." prefix from an IO map name
+	if (rz_str_startswith(name, "fmap.")) {
+		name += 5;
+	} else if (rz_str_startswith(name, "mmap.")) {
+		name += 5;
+	} else if (rz_str_startswith(name, "vmap.")) {
+		name += 5;
+	} else {
+		return NULL;
+	}
+	// only take absolute paths
+	if (*name != '/') {
+		return NULL;
+	}
+	return name;
+}
+
+static ut64 rz_heap_get_main_arena_with_symbol_core_dump(RzCore *core, RzIOMap *map) {
+	rz_return_val_if_fail(core && map, UT64_MAX);
+	ut64 base_addr = map->itv.addr;
+	rz_return_val_if_fail(base_addr != UT64_MAX, UT64_MAX);
+
+	ut64 main_arena = UT64_MAX;
+	ut64 off = UT64_MAX;
+	const char *path = io_map_file_path(map);
+	if (path && rz_file_exists(path)) {
+		off = rz_heap_get_va_symbol(core, path, "main_arena");
+		if (off != UT64_MAX) {
+			main_arena = base_addr + off;
+			return main_arena;
+		}
+	}
+	return UT64_MAX;
+}
+
 
 static ut8 *get_glibc_banner(RzCore *core, const char *section_name,
 	const char *libc_path) {
@@ -507,6 +558,113 @@ bool rz_heap_update_main_arena_internal(RzCore *core, ut64 m_arena, MallocState 
 	return true;
 }
 
+/**
+ * \brief Strip the "fmap.", "mmap.", "vmap." prefix from a core dump IO map name.
+ * \return The stripped name, or NULL if the map has no name or no recognized prefix.
+ */
+static const char *io_map_strip_prefix(const RzIOMap *map) {
+	if (!map->name) {
+		return NULL;
+	}
+	const char *name = map->name;
+	if (rz_str_startswith(name, "fmap.")) {
+		return name + 5;
+	} else if (rz_str_startswith(name, "mmap.")) {
+		return name + 5;
+	} else if (rz_str_startswith(name, "vmap.")) {
+		return name + 5;
+	}
+	return NULL;
+}
+
+/**
+ * \brief Check if a core dump IO map is an anonymous segment (i.e., LOAD# with no file backing).
+ */
+static bool io_map_is_anonymous_load(const RzIOMap *map) {
+	const char *name = io_map_strip_prefix(map);
+	if (!name) {
+		return false;
+	}
+	// Anonymous segments are named "LOAD<number>" (no file path in NT_FILE)
+	if (!rz_str_startswith(name, "LOAD")) {
+		return false;
+	}
+	// Verify the rest is a number
+	const char *p = name + 4;
+	if (*p == '\0') {
+		return false;
+	}
+	while (*p) {
+		if (*p < '0' || *p > '9') {
+			return false;
+		}
+		p++;
+	}
+	return true;
+}
+
+/**
+ * \brief Resolve brk_start and brk_end from a core dump.
+ *
+ * In core dumps, the [heap] label doesn't exist. The brk heap is identified
+ * as the first anonymous LOAD segment after the main executable's last mapping.
+ * This works because the kernel places the brk region right after the program's
+ * data segment, while mmap regions (libraries, large allocations) are placed
+ * at a much higher address range.
+ *
+ * The main executable is identified as the first file-backed mapping in the
+ * core dump (lowest address). All maps sharing the same file path belong to
+ * the executable.
+ */
+static void rz_heap_get_brks_core_dump(RzCore *core, ut64 *brk_start, ut64 *brk_end) {
+	RzPVector *maps = rz_io_maps(core->io);
+	if (!maps) {
+		return;
+	}
+
+	// First pass: identify the main executable's file path.
+	// The executable is the first file-backed mapping (lowest address) that
+	// is not a special region like [stack], [vdso], etc.
+	const char *exe_path = NULL;
+	ut64 lowest_addr = UT64_MAX;
+	void **it;
+	rz_pvector_foreach (maps, it) {
+		RzIOMap *map = *it;
+		const char *path = io_map_file_path(map);
+		if (path && map->itv.addr < lowest_addr) {
+			lowest_addr = map->itv.addr;
+			exe_path = path;
+		}
+	}
+
+	if (!exe_path) {
+		return;
+	}
+
+	// Second pass: find the end of all mappings belonging to the executable
+	ut64 exe_end = 0;
+	rz_pvector_foreach (maps, it) {
+		RzIOMap *map = *it;
+		const char *path = io_map_file_path(map);
+		if (path && !strcmp(path, exe_path)) {
+			ut64 end = map->itv.addr + map->itv.size;
+			if (end > exe_end) {
+				exe_end = end;
+			}
+		}
+	}
+
+	// Third pass: find the first anonymous LOAD segment after the executable
+	rz_pvector_foreach (maps, it) {
+		RzIOMap *map = *it;
+		if (map->itv.addr > exe_end && io_map_is_anonymous_load(map)) {
+			*brk_start = map->itv.addr;
+			*brk_end = map->itv.addr + map->itv.size;
+			return;
+		}
+	}
+}
+
 static void rz_heap_get_brks(RzCore *core, ut64 *brk_start, ut64 *brk_end) {
 	if (rz_config_get_b(core->config, "cfg.debug")) {
 		RzListIter *iter;
@@ -530,10 +688,13 @@ static void rz_heap_get_brks(RzCore *core, ut64 *brk_start, ut64 *brk_end) {
 				if (strstr(map->name, "[heap]")) {
 					*brk_start = map->itv.addr;
 					*brk_end = map->itv.addr + map->itv.size;
-					break;
+					return;
 				}
 			}
 		}
+		// Core dumps don't have a [heap] label. Identify the brk heap
+		// as the first anonymous LOAD segment after the main executable.
+		rz_heap_get_brks_core_dump(core, brk_start, brk_end);
 	}
 }
 
@@ -661,8 +822,17 @@ static void print_arena_stats(RzCore *core, ut64 m_arena, MallocState *main_aren
 	PRINT_GA("}\n\n");
 }
 
-RZ_IPI bool rz_heap_is_map_name_libc(const char *map_name) {
-	return strstr(map_name, "/libc-") || strstr(map_name, "/libc.");
+// TODO: from librz/core/cmd/cmd_debug.c
+static bool file_is_core_dump(RzCore *core) {
+	int cur_fd = rz_io_fd_get_current(core->io);
+	RzBinFile *bf = rz_bin_file_find_by_fd(core->bin, cur_fd);
+	if (!bf) {
+		// Fallback for cases where there is no binfile bound to the current fd.
+		bf = rz_bin_cur(core->bin);
+	}
+	RzBinPlugin *plugin = bf ? rz_bin_file_cur_plugin(bf) : NULL;
+	bool is_core = plugin && plugin->file_type && plugin->file_type(bf) == RZ_BIN_TYPE_CORE;
+	return is_core;
 }
 
 /**
@@ -704,6 +874,31 @@ RZ_API bool rz_heap_resolve_main_arena(RzCore *core, ut64 *m_arena) {
 				break;
 			}
 		}
+	} else if (file_is_core_dump(core)) {
+		void **it;
+		RzPVector *maps = rz_io_maps(core->io);
+		rz_pvector_foreach (maps, it) {
+			RzIOMap *map = *it;
+			if (map->name && strstr(map->name, "arena")) {
+				libc_addr_sta = map->itv.addr;
+				libc_addr_end = map->itv.addr + map->itv.size;
+				break;
+			}
+			/* Try to find the main arena address using the glibc's symbols. */
+			if (rz_heap_is_map_name_libc(map->name) && first_libc && main_arena_sym == UT64_MAX) {
+				first_libc = false;
+				main_arena_sym = rz_heap_get_main_arena_with_symbol_core_dump(core, map);
+			}
+			if (rz_heap_is_map_name_libc(map->name)) {
+				if (map->itv.addr < libc_addr_sta) {
+					libc_addr_sta = map->itv.addr;
+				}
+				ut64 end = map->itv.addr + map->itv.size;
+				if (end > libc_addr_end) {
+					libc_addr_end = end;
+				}
+			}
+		}
 	} else {
 		void **it;
 		RzPVector *maps = rz_io_maps(core->io);
@@ -717,7 +912,7 @@ RZ_API bool rz_heap_resolve_main_arena(RzCore *core, ut64 *m_arena) {
 		}
 	}
 
-	if (libc_addr_sta == UT64_MAX || libc_addr_end == UT64_MAX) {
+	if (libc_addr_sta == UT64_MAX || libc_addr_end == 0) {
 		if (rz_config_get_b(core->config, "cfg.debug")) {
 			RZ_LOG_WARN("core: Can't find glibc mapped in memory (see dm)\n");
 		} else {
