@@ -1123,26 +1123,61 @@ RZ_IPI RzCmdStatus rz_cmd_debug_dmi_handler(RzCore *core, int argc, const char *
 	return RZ_CMD_STATUS_OK;
 }
 
-// TODO: dont work
+// tested working
+// [0x00000000]> dmia
+// 0x56149dfaf000 0x56149dfb0000  /home/florian/dev/crash/crash-linux-x86_64
+// 0x7f582fa31000 0x7f582fa56000  /usr/lib/libc-2.33.so
+// 0x7f582fc4c000 0x7f582fc4d000  /usr/lib/ld-2.33.so
+// [0x00000000]> dmia /home/florian/dev/crash/crash-linux-x86_64 
+// [Imports]
+// nth          vaddr bind   type   lib name                        
+// -----------------------------------------------------------------
+//   3     ---------- WEAK   NOTYPE     _ITM_deregisterTMCloneTable
+//   4     ---------- WEAK   FUNC       __cxa_finalize
 RZ_IPI RzCmdStatus rz_cmd_debug_dmi_all_handler(RzCore *core, int argc, const char **argv, RzCmdStateOutput *state) {
-	if (!file_is_core_dump(core)){
-		CMD_CHECK_DEBUG_DEAD(core);
-	}
 	if (argc == 1) {
+		// Effectively an alias for 'dmm'
+		if (file_is_core_dump(core)){
+			cmd_io_modules(core, state);
+			rz_cmd_state_output_print(state);
+			rz_cons_flush();
+			return RZ_CMD_STATUS_OK;
+		}
+		CMD_CHECK_DEBUG_DEAD(core);
 		cmd_debug_modules(core, state);
 		rz_cmd_state_output_print(state);
 		rz_cons_flush();
 		return RZ_CMD_STATUS_OK;
 	}
+
 	const char *lib_name = argv[1];
+	RzCoreBinFilter filter = { .offset = UT64_MAX, .name = NULL };
+	int action = RZ_CORE_BIN_ACC_ALL & ~RZ_CORE_BIN_ACC_INFO;
+
+	if (file_is_core_dump(core)){
+		RzIOMap *map = get_io_map_from_lib_name(core, lib_name);
+		if (!map) {
+			RZ_LOG_ERROR("Failed to get map from %s\n", lib_name);
+			return RZ_CMD_STATUS_ERROR;
+		}
+		const char *file = io_map_file_path(map);
+		if (!file) {
+			file = map->name;
+		}
+		if (!get_bin_info(core, file, map->itv.addr, state, action, &filter)) {
+			RZ_LOG_ERROR("Failed to get binary information for map: '%s' in file: '%s'\n", map->name, file);
+			return RZ_CMD_STATUS_ERROR;
+		}
+		return RZ_CMD_STATUS_OK;
+	}
+
+	CMD_CHECK_DEBUG_DEAD(core);
 	RzDebugMap *map = get_debug_map_from_lib_name(core, lib_name);
 	if (!map) {
 		RZ_LOG_ERROR("Failed to get map from %s\n", lib_name);
 		return RZ_CMD_STATUS_ERROR;
 	}
 	const char *file = map->file ? map->file : map->name;
-	RzCoreBinFilter filter = { .offset = UT64_MAX, .name = NULL };
-	int action = RZ_CORE_BIN_ACC_ALL & ~RZ_CORE_BIN_ACC_INFO;
 	if (!get_bin_info(core, file, map->addr, state, action, &filter)) {
 		RZ_LOG_ERROR("Failed to get binary information for map: '%s' in file: '%s'\n", map->name, file);
 		return RZ_CMD_STATUS_ERROR;
