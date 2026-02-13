@@ -586,6 +586,56 @@ static int dump_maps(RzCore *core, int perm, const char *filename) {
 	return ret;
 }
 
+#define MAX_MAP_SIZE (1024 * 1024 * 512)
+static int dump_io_maps(RzCore *core, int perm, const char *filename) {
+	RzPVector *maps = rz_io_maps(core->io);
+	ut64 addr = core->offset;
+	int ret = !rz_pvector_empty(maps);
+	void **it;
+	rz_pvector_foreach (maps, it) {
+		RzIOMap *map = *it;
+		ut64 map_addr = map->itv.addr;
+		ut64 map_size = map->itv.size;
+		ut64 map_end = map_addr + map_size;
+		bool do_dump = false;
+		if (perm == -1) {
+			if (addr >= map_addr && addr < map_end) {
+				do_dump = true;
+			}
+		} else if (perm == 0) {
+			do_dump = true;
+		} else if (perm == (map->perm & perm)) {
+			do_dump = true;
+		}
+		if (do_dump) {
+			ut8 *buf = malloc(map_size);
+			if (!buf) {
+				RZ_LOG_ERROR("core: Cannot allocate 0x%08" PFMT64x " bytes\n", map_size);
+				continue;
+			}
+			if (map_size > MAX_MAP_SIZE) {
+				RZ_LOG_ERROR("core: map size is too big to be dumped (0x%08" PFMT64x " > 0x%08x)\n", map_addr, MAX_MAP_SIZE);
+				free(buf);
+				continue;
+			}
+			rz_io_read_at_mapped(core->io, map_addr, buf, map_size);
+			char *file = filename
+				? rz_str_dup(filename)
+				: rz_str_newf("0x%08" PFMT64x "-0x%08" PFMT64x "-%s.dmp",
+					  map_addr, map_end, rz_str_rwx_i(map->perm));
+			if (!rz_file_dump(file, buf, map_size, 0)) {
+				RZ_LOG_ERROR("core: Cannot write '%s'\n", file);
+				ret = 0;
+			} else {
+				RZ_LOG_WARN("core: Dumped %d byte(s) into %s\n", (int)map_size, file);
+			}
+			free(file);
+			free(buf);
+		}
+	}
+	return ret;
+}
+
 static void cmd_debug_current_modules(RzCore *core, RzOutputMode mode) { // "dmm"
 	ut64 addr = core->offset;
 	RzDebugMap *map;
@@ -799,11 +849,21 @@ RZ_IPI RzCmdStatus rz_cmd_debug_map_current_handler(RzCore *core, int argc, cons
 }
 
 // dmd
-// TODO: dont work 
+// tested working
+// [0x00000000]> s 0x56149dfaf000
+// file_is_core_dump: true
+// WARNING: core: Dumped 4096 byte(s) into 0x56149dfaf000-0x56149dfb0000-r--.dmp
 RZ_IPI RzCmdStatus rz_cmd_debug_dump_maps_handler(RzCore *core, int argc, const char **argv) {
-	if (!file_is_core_dump(core)){
-		CMD_CHECK_DEBUG_DEAD(core);
+
+	if (file_is_core_dump(core)){
+		if (argc == 2) {
+			dump_io_maps(core, -1, argv[1]);
+		} else if (argc == 1) {
+			dump_io_maps(core, -1, NULL);
+		}	
+		return RZ_CMD_STATUS_OK;
 	}
+	CMD_CHECK_DEBUG_DEAD(core);
 	if (argc == 2) {
 		dump_maps(core, -1, argv[1]);
 	} else if (argc == 1) {
