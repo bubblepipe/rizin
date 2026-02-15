@@ -150,7 +150,6 @@ static inline ut64 rz_heap_get_next_pointer(RzCore *core, ut64 pos, ut64 next, c
 		: next;
 }
 
-// from test/db/archos/linux-arm64/dbg_dmh
 RZ_IPI bool rz_heap_is_map_name_libc(const char *map_name) {
 	return map_name && (strstr(map_name, "/libc-") || strstr(map_name, "/libc."));
 }
@@ -531,19 +530,14 @@ bool rz_heap_update_main_arena_internal(RzCore *core, ut64 m_arena, MallocState 
 	return true;
 }
 
-/**
- * \brief Check if a core dump IO map is an anonymous segment (i.e., LOAD# with no file backing).
- */
 static bool io_map_is_anonymous_load(const RzIOMap *map) {
 	const char *name = rz_core_io_map_strip_prefix(map);
 	if (!name) {
 		return false;
 	}
-	// Anonymous segments are named "LOAD<number>" (no file path in NT_FILE)
 	if (!rz_str_startswith(name, "LOAD")) {
 		return false;
 	}
-	// Verify the rest is a number
 	const char *p = name + 4;
 	if (*p == '\0') {
 		return false;
@@ -558,17 +552,24 @@ static bool io_map_is_anonymous_load(const RzIOMap *map) {
 }
 
 /**
- * \brief Resolve brk_start and brk_end from a core dump.
- *
- * In core dumps, the [heap] label doesn't exist. The brk heap is identified
- * as the first anonymous LOAD segment after the main executable's last mapping.
+ * In debug mode, we can locate the heap by the `[heap]` label:
+ *  [0xaaaaea80094c]> dm
+ * 0x0000aaaaea800000 - 0x0000aaaaea801000 * usr     4K s r-x /rizin/test/bins/heap/segfault-heap-aarch64 /rizin/test/bins/heap/segfault-heap-aarch64 ; rizin_test_bins_heap_segfault_heap_aarch64.r_x
+ * 0x0000aaaaea81f000 - 0x0000aaaaea820000 - usr     4K s r-- /rizin/test/bins/heap/segfault-heap-aarch64 /rizin/test/bins/heap/segfault-heap-aarch64 ; rizin_test_bins_heap_segfault_heap_aarch64.rw
+ * 0x0000aaaaea820000 - 0x0000aaaaea821000 - usr     4K s rw- /rizin/test/bins/heap/segfault-heap-aarch64 /rizin/test/bins/heap/segfault-heap-aarch64 ; loc.__data_start
+ * 0x0000aaab0f265000 - 0x0000aaab0f286000 - usr   132K s rw- [heap] [heap]
+ * 0x0000ffff9ac40000 - 0x0000ffff9add9000 - usr   1.6M s r-x /usr/lib/aarch64-linux-gnu/libc.so.6 /usr/lib/aarch64-linux-gnu/libc.so.6
+ * 0x0000ffff9add9000 - 0x0000ffff9aded000 - usr    80K s --- /usr/lib/aarch64-linux-gnu/libc.so.6 /usr/lib/aarch64-linux-gnu/libc.so.6
+ * But in core dumps, the [heap] label doesn't exist:
+ *  [0x00000840]> dm
+ *  1 fd: 4 +0x00000000 0xaaaae3c60000 - 0xaaaae3c60fff r-x mmap./run/host_virtiofs/Users/bubblepipe/repo/rizin/test/bins/heap/segfault-heap-aarch64
+ *  2 fd: 3 +0x00002000 0xaaaae3c7f000 - 0xaaaae3c7ffff r-- fmap./run/host_virtiofs/Users/bubblepipe/repo/rizin/test/bins/heap/segfault-heap-aarch64
+ *  3 fd: 3 +0x00003000 0xaaaae3c80000 - 0xaaaae3c80fff r-- fmap./run/host_virtiofs/Users/bubblepipe/repo/rizin/test/bins/heap/segfault-heap-aarch64
+ *  4 fd: 3 +0x00004000 0xaaab126cd000 - 0xaaab126edfff r-- fmap.LOAD3
+ *  5 fd: 5 +0x00000000 0xffff9a5d0000 - 0xffff9a768fff r-x mmap./usr/lib/aarch64-linux-gnu/libc.so.6
+ * We identify the brk heap as the first anonymous LOAD segment after the main executable's last mapping.
  * This works because the kernel places the brk region right after the program's
- * data segment, while mmap regions (libraries, large allocations) are placed
- * at a much higher address range.
- *
- * The main executable is identified as the first file-backed mapping in the
- * core dump (lowest address). All maps sharing the same file path belong to
- * the executable.
+ * data segment, while other regions are placed at a much higher address range.
  */
 static void rz_heap_get_brks_core_dump(RzCore *core, ut64 *brk_start, ut64 *brk_end) {
 	RzPVector *maps = rz_io_maps(core->io);
@@ -576,8 +577,8 @@ static void rz_heap_get_brks_core_dump(RzCore *core, ut64 *brk_start, ut64 *brk_
 		return;
 	}
 
-	// First pass: identify the main executable's file path.
-	// The executable is the first file-backed mapping (lowest address) that
+	// identify the main executable's file path:
+	// the first file-backed mapping (low address) that
 	// is not a special region like [stack], [vdso], etc.
 	const char *exe_path = NULL;
 	ut64 lowest_addr = UT64_MAX;
@@ -595,7 +596,7 @@ static void rz_heap_get_brks_core_dump(RzCore *core, ut64 *brk_start, ut64 *brk_
 		return;
 	}
 
-	// Second pass: find the end of all mappings belonging to the executable
+	// find the end of all mappings belonging to the executable
 	ut64 exe_end = 0;
 	rz_pvector_foreach (maps, it) {
 		RzIOMap *map = *it;
@@ -608,7 +609,7 @@ static void rz_heap_get_brks_core_dump(RzCore *core, ut64 *brk_start, ut64 *brk_
 		}
 	}
 
-	// Third pass: find the first anonymous LOAD segment after the executable
+	// find the first anonymous LOAD segment after the executable
 	rz_pvector_foreach (maps, it) {
 		RzIOMap *map = *it;
 		if (map->itv.addr > exe_end && io_map_is_anonymous_load(map)) {
@@ -646,8 +647,6 @@ static void rz_heap_get_brks(RzCore *core, ut64 *brk_start, ut64 *brk_end) {
 				}
 			}
 		}
-		// Core dumps don't have a [heap] label. Identify the brk heap
-		// as the first anonymous LOAD segment after the main executable.
 		rz_heap_get_brks_core_dump(core, brk_start, brk_end);
 	}
 }
@@ -1041,24 +1040,6 @@ RZ_API RZ_OWN bool resolve_heap_tcache(RZ_NONNULL RzCore *core, ut64 arena_base,
 	return true;
 }
 
-// tested working 
-// [0xaaab126cd290]> dmhc @ 0xaaab126cd290
-
-// struct malloc_chunk @ 0xaaab126cd290 {
-//   prev_size = 0x0,
-//   size = 0x410,
-//   flags: |N:0 |M:0 |P:1,
-//   fd = 0x6e75686320676942,
-//   bk = 0x617830207461206b,
-//   fd-nextsize = 0x6463363231626161,
-//   bk-nextsize = 0x6c6568203a306536,
-// }
-// chunk data = 
-// 0xaaab126cd2a0  0x6e75686320676942  0x617830207461206b   Big chunk at 0xa
-// 0xaaab126cd2b0  0x6463363231626161  0x6c6568203a306536   aab126cd6e0: hel
-// 0xaaab126cd2c0  0x646c726f77206f6c  0x00000000000a640a   lo world.d......
-// 0xaaab126cd2d0  0x0000000000000000  0x0000000000000000   ................
-// 0xaaab126cd2e0  0x0000000000000000  0x0000000000000000   ................
 void print_heap_chunk(RzCore *core, ut64 chunk, const RzHeapConfig *config) {
 	RzConsPrintablePalette *pal = &rz_cons_singleton()->context->pal;
 	if (!config) {

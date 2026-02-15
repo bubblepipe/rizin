@@ -768,55 +768,37 @@ static RzDebugMap *get_closest_map(RzCore *core, ut64 addr) {
 	return NULL;
 }
 
-// TODO: this function is vibe coded. 
-static ut64 addroflib_io(RzCore *core, const char *libname) {
-	if (!core || !libname) {
-		return UT64_MAX;
+static RzIOMap *get_io_map_from_lib_name(RzCore *core, const char *lib_name) {
+	if (!core || !lib_name) {
+		return NULL;
 	}
+	const char *basename = rz_file_basename(lib_name);
 	// Search modules first
+	RzIOMap *result = NULL;
 	RzPVector *modules = rz_io_modules_list(core);
 	void **it;
 	rz_pvector_foreach (modules, it) {
 		RzIOMap *map = *it;
 		const char *file = rz_core_io_map_file_path(map);
-		if (file && strstr(rz_file_basename(file), libname)) {
-			ut64 addr = map->itv.addr;
-			rz_pvector_free(modules);
-			return addr;
+		if (file && strstr(rz_file_basename(file), basename)) {
+			result = map;
+			break;
 		}
 	}
 	rz_pvector_free(modules);
+	if (result) {
+		return result;
+	}
 	// Fall back to all IO maps
 	RzPVector *maps = rz_io_maps(core->io);
 	rz_pvector_foreach (maps, it) {
 		RzIOMap *map = *it;
 		const char *file = rz_core_io_map_file_path(map);
-		if (file && strstr(rz_file_basename(file), libname)) {
-			return map->itv.addr;
-		}
-	}
-	return UT64_MAX;
-}
-
-// TODO: this function is vibe coded. 
-static RzIOMap *get_io_map_from_lib_name(RzCore *core, const char *lib_name) {
-	ut64 addr = addroflib_io(core, rz_file_basename(lib_name));
-	if (addr == UT64_MAX) {
-		RZ_LOG_ERROR("Unknown library '%s' not found\n", lib_name);
-		return NULL;
-	}
-	// Find the IO map containing this address
-	RzPVector *maps = rz_io_maps(core->io);
-	void **it;
-	rz_pvector_foreach (maps, it) {
-		RzIOMap *map = *it;
-		ut64 map_addr = map->itv.addr;
-		ut64 map_end = map_addr + map->itv.size;
-		if (addr >= map_addr && addr < map_end) {
+		if (file && strstr(rz_file_basename(file), basename)) {
 			return map;
 		}
 	}
-	RZ_LOG_ERROR("Didn't find library map at 0x%" PFMT64x "\n", addr);
+	RZ_LOG_ERROR("Unknown library '%s' not found\n", lib_name);
 	return NULL;
 }
 
@@ -881,11 +863,6 @@ RZ_IPI RzCmdStatus rz_cmd_debug_allocate_maps_handler(RzCore *core, int argc, co
 }
 
 // dmm
-// tested working 
-// [0x00000000]> dmm
-// 0x56149dfaf000 0x56149dfb0000  fmap./home/florian/dev/crash/crash-linux-x86_64
-// 0x7f582fa31000 0x7f582fa56000  mmap./usr/lib/libc-2.33.so
-// 0x7f582fc4c000 0x7f582fc4d000  fmap./usr/lib/ld-2.33.so
 RZ_IPI RzCmdStatus rz_cmd_debug_modules_handler(RzCore *core, int argc, const char **argv, RzCmdStateOutput *state) {
 	if (rz_core_file_is_core_dump(core)) {
 		cmd_io_modules(core, state);
@@ -897,14 +874,6 @@ RZ_IPI RzCmdStatus rz_cmd_debug_modules_handler(RzCore *core, int argc, const ch
 }
 
 // dmm.
-// tested working 
-// [0xffff9e8af000]> dm
-//  1 fd: 3 +0x00002000 0x56149dfaf000 - 0x56149dfaffff r-- fmap./home/florian/dev/crash/crash-linux-x86_64
-//  2 fd: 4 +0x00000000 0x56149dfb0000 - 0x56149dfb0fff r-x mmap./home/florian/dev/crash/crash-linux-x86_64 
-// [0xffff9e8af000]> s 0x56149dfaf000
-// [0x56149dfaf000]> dmm.
-// file_is_core_dump: true
-// 0x56149dfaf000 0x56149dfb0000  /home/florian/dev/crash/crash-linux-x86_64
 RZ_IPI RzCmdStatus rz_cmd_debug_current_modules_handler(RzCore *core, int argc, const char **argv, RzOutputMode mode) {
 	if (rz_core_file_is_core_dump(core)) {
 		cmd_io_current_modules(core, mode);
@@ -967,10 +936,6 @@ RZ_IPI RzCmdStatus rz_cmd_debug_map_current_handler(RzCore *core, int argc, cons
 }
 
 // dmd
-// tested working
-// [0x00000000]> s 0x56149dfaf000
-// file_is_core_dump: true
-// WARNING: core: Dumped 4096 byte(s) into 0x56149dfaf000-0x56149dfb0000-r--.dmp
 RZ_IPI RzCmdStatus rz_cmd_debug_dump_maps_handler(RzCore *core, int argc, const char **argv) {
 
 	if (rz_core_file_is_core_dump(core)){
@@ -991,15 +956,6 @@ RZ_IPI RzCmdStatus rz_cmd_debug_dump_maps_handler(RzCore *core, int argc, const 
 }
 
 // dmda
-// tested working 
-// [0x00000000]> dmda
-// WARNING: core: Dumped 4096 byte(s) into 0x56149dfaf000-0x56149dfb0000-r--.dmp
-// WARNING: core: Dumped 4096 byte(s) into 0x56149dfb0000-0x56149dfb1000-r-x.dmp
-// WARNING: core: Dumped 4096 byte(s) into 0x56149dfb1000-0x56149dfb2000-r--.dmp
-// WARNING: core: Dumped 4096 byte(s) into 0x56149dfb2000-0x56149dfb3000-r--.dmp
-// WARNING: core: Dumped 4096 byte(s) into 0x56149dfb3000-0x56149dfb4000-r--.dmp
-// WARNING: core: Dumped 8192 byte(s) into 0x7f582fa2e000-0x7f582fa30000-r--.dmp
-// WARNING: core: Dumped 151552 byte(s) into 0x7f582fa31000-0x7f582fa56000-r--.dmp
 RZ_IPI RzCmdStatus rz_cmd_debug_dump_maps_all_handler(RzCore *core, int argc, const char **argv) {
 	if (rz_core_file_is_core_dump(core)){
 		dump_io_maps(core, 0, NULL);
@@ -1011,7 +967,6 @@ RZ_IPI RzCmdStatus rz_cmd_debug_dump_maps_all_handler(RzCore *core, int argc, co
 }
 
 // dmdw
-// should be working, but there is nothing writable in core dump mode
 RZ_IPI RzCmdStatus rz_cmd_debug_dump_maps_writable_handler(RzCore *core, int argc, const char **argv) {
 	if (rz_core_file_is_core_dump(core)){
 		dump_io_maps(core, RZ_PERM_RW, NULL);
@@ -1037,19 +992,6 @@ static RzDebugMap *get_debug_map_from_lib_name(RzCore *core, const char *lib_nam
 	return map;
 }
 
-// [0x00000000]> dmi
-// file_is_core_dump: true
-// 0x56149dfaf000 0x56149dfb0000  /home/florian/dev/crash/crash-linux-x86_64
-// 0x7f582fa31000 0x7f582fa56000  /usr/lib/libc-2.33.so
-// 0x7f582fc4c000 0x7f582fc4d000  /usr/lib/ld-2.33.so
-// [0x00000000]> dmi /home/florian/dev/crash/crash-linux-x86_64 
-// [Symbols]
-// nth      paddr          vaddr bind   type   size lib name                                                                 
-// --------------------------------------------------------------------------------------------------------------------------
-//   1 0x000005b8 0x56149dfaf5b8 LOCAL  SECT      0     .init
-//   2 0x00001020 0x56149dfc0020 LOCAL  SECT      0     .data
-//   1 0x00000238 0x56149dfaf238 LOCAL  SECT      0     .interp
-// tested working 
 RZ_IPI RzCmdStatus rz_cmd_debug_dmi_handler(RzCore *core, int argc, const char **argv, RzCmdStateOutput *state) {
 
 	if (argc == 1) {
@@ -1103,17 +1045,6 @@ RZ_IPI RzCmdStatus rz_cmd_debug_dmi_handler(RzCore *core, int argc, const char *
 	return RZ_CMD_STATUS_OK;
 }
 
-// tested working
-// [0x00000000]> dmia
-// 0x56149dfaf000 0x56149dfb0000  /home/florian/dev/crash/crash-linux-x86_64
-// 0x7f582fa31000 0x7f582fa56000  /usr/lib/libc-2.33.so
-// 0x7f582fc4c000 0x7f582fc4d000  /usr/lib/ld-2.33.so
-// [0x00000000]> dmia /home/florian/dev/crash/crash-linux-x86_64 
-// [Imports]
-// nth          vaddr bind   type   lib name                        
-// -----------------------------------------------------------------
-//   3     ---------- WEAK   NOTYPE     _ITM_deregisterTMCloneTable
-//   4     ---------- WEAK   FUNC       __cxa_finalize
 RZ_IPI RzCmdStatus rz_cmd_debug_dmi_all_handler(RzCore *core, int argc, const char **argv, RzCmdStateOutput *state) {
 	if (argc == 1) {
 		// Effectively an alias for 'dmm'
@@ -1129,7 +1060,6 @@ RZ_IPI RzCmdStatus rz_cmd_debug_dmi_all_handler(RzCore *core, int argc, const ch
 		rz_cons_flush();
 		return RZ_CMD_STATUS_OK;
 	}
-
 	const char *lib_name = argv[1];
 	RzCoreBinFilter filter = { .offset = UT64_MAX, .name = NULL };
 	int action = RZ_CORE_BIN_ACC_ALL & ~RZ_CORE_BIN_ACC_INFO;
@@ -1165,13 +1095,6 @@ RZ_IPI RzCmdStatus rz_cmd_debug_dmi_all_handler(RzCore *core, int argc, const ch
 	return RZ_CMD_STATUS_OK;
 }
 
-// tested working
-// [0x00000000]> s 0x56149dfaf000
-// [0x56149dfaf6f0]> dmi.
-// [Symbols]
-// nth      paddr      vaddr bind   type   size lib name       
-// ------------------------------------------------------------
-//  83 ---------- 0x00011038 GLOBAL NOTYPE    0     _bss_end__
 RZ_IPI RzCmdStatus rz_cmd_debug_dmi_closest_handler(RzCore *core, int argc, const char **argv, RzCmdStateOutput *state) {
 	RzBinObject *obj = rz_bin_cur_object(core->bin);
 	if (!obj) {
@@ -1250,22 +1173,6 @@ RZ_IPI RzCmdStatus rz_debug_memory_permission_handler(RzCore *core, int argc, co
 	return RZ_CMD_STATUS_OK;
 }
 
-// tested working
-// [0x00000000]> dmS
-// file_is_core_dump: true
-// WARNING: Neither hash nor gnu_hash exist. Falling back to heuristics for deducing the number of dynamic symbols...
-// WARNING: Neither hash nor gnu_hash exist. Falling back to heuristics for deducing the number of dynamic symbols...
-// WARNING: Neither hash nor gnu_hash exist. Falling back to heuristics for deducing the number of dynamic symbols...
-// rz_core: Cannot open file '/usr/lib/libc-2.33.so'
-// rz_core: Cannot open file '/usr/lib/ld-2.33.so'
-// [Sections]
-//      paddr  size          vaddr vsize align perm name                                  type       flags         
-// ----------------------------------------------------------------------------------------------------------------
-// 0x00000000   0x0     ----------   0x0   0x0 ---- crash-linux-x86_64.                   NULL       
-// 0x00000238  0x1b 0x56149dfaf238  0x1b   0x0 -r-- crash-linux-x86_64..interp            PROGBITS   alloc
-// 0x00000254  0x24 0x56149dfaf254  0x24   0x0 -r-- crash-linux-x86_64..note.gnu.build-id NOTE       alloc
-// 0x00000278  0x20 0x56149dfaf278  0x20   0x0 -r-- crash-linux-x86_64..note.ABI-tag      NOTE       alloc
-// 0x00000298  0x1c 0x56149dfaf298  0x1c   0x0 -r-- crash-linux-x86_64..gnu.hash          GNU_HASH   alloc
 RZ_IPI RzCmdStatus rz_cmd_debug_dmS_handler(RzCore *core, int argc, const char **argv, RzOutputMode m) {
 	RzListIter *iter;
 	ut64 addr;
@@ -1289,9 +1196,9 @@ RZ_IPI RzCmdStatus rz_cmd_debug_dmS_handler(RzCore *core, int argc, const char *
 
 	if (rz_core_file_is_core_dump(core)) {
 		RzPVector *maps = rz_io_modules_list(core);
-		void **iter;
-		rz_pvector_foreach (maps, iter) {
-			RzIOMap *map = *iter;
+		void **it;
+		rz_pvector_foreach (maps, it) {
+			RzIOMap *map = *it;
 			ut64 map_addr = map->itv.addr;
 			ut64 map_end = map_addr + map->itv.size;
 			if ((!libname ||
@@ -1321,6 +1228,7 @@ RZ_IPI RzCmdStatus rz_cmd_debug_dmS_handler(RzCore *core, int argc, const char *
 				}
 			}
 		}
+		rz_pvector_free(maps);
 		return RZ_CMD_STATUS_OK;
 	}
 
