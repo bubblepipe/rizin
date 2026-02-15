@@ -687,7 +687,7 @@ EOF
 RUN
 
 NAME=dmh commands on arm64 core dump
-FILE=bins/heap/segfault-heap-aarch64-core
+FILE=bins/heap/segfault-glibc-aarch64-core
 CMDS=<<EOF
 dmh~Arena
 dmha
