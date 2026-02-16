@@ -10,7 +10,7 @@
 static bool core_file_do_load_for_debug(RzCore *r, ut64 baseaddr, const char *filenameuri);
 static bool core_file_do_load_for_io_plugin(RzCore *r, ut64 baseaddr, ut64 loadaddr);
 
-RZ_IPI bool rz_core_file_is_core_dump(RzCore *core) {
+RZ_IPI bool rz_core_is_core_dump(RzCore *core) {
 	if (!core || !core->io || !core->bin) {
 		return false;
 	}

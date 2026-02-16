@@ -814,7 +814,7 @@ RZ_API bool rz_heap_resolve_main_arena(RzCore *core, ut64 *m_arena) {
 				break;
 			}
 		}
-	} else if (rz_core_file_is_core_dump(core)) {
+	} else if (rz_core_is_core_dump(core)) {
 		void **it;
 		RzPVector *maps = rz_io_maps(core->io);
 		rz_pvector_foreach (maps, it) {

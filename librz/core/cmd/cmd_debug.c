@@ -840,7 +840,7 @@ static bool get_bin_info(RzCore *core, const char *file, ut64 baseaddr,
 // dm
 RZ_IPI RzCmdStatus rz_cmd_debug_list_maps_handler(RzCore *core, int argc, const char **argv, RzCmdStateOutput *state) {
 	// dm is oml when file is a core dump
-	if (rz_core_file_is_core_dump(core)) {
+	if (rz_core_is_core_dump(core)) {
 		return rz_open_maps_list_handler(core, argc, argv, state);
 	}
 	CMD_CHECK_DEBUG_DEAD(core);
@@ -851,7 +851,7 @@ RZ_IPI RzCmdStatus rz_cmd_debug_list_maps_handler(RzCore *core, int argc, const 
 
 // dm+
 RZ_IPI RzCmdStatus rz_cmd_debug_allocate_maps_handler(RzCore *core, int argc, const char **argv) {
-	if (rz_core_file_is_core_dump(core)) {
+	if (rz_core_is_core_dump(core)) {
 		rz_cons_printf("Cannot allocate maps in core dump mode\n");
 		return RZ_CMD_STATUS_ERROR;
 	}
@@ -864,7 +864,7 @@ RZ_IPI RzCmdStatus rz_cmd_debug_allocate_maps_handler(RzCore *core, int argc, co
 
 // dmm
 RZ_IPI RzCmdStatus rz_cmd_debug_modules_handler(RzCore *core, int argc, const char **argv, RzCmdStateOutput *state) {
-	if (rz_core_file_is_core_dump(core)) {
+	if (rz_core_is_core_dump(core)) {
 		cmd_io_modules(core, state);
 		return RZ_CMD_STATUS_OK;
 	}
@@ -875,7 +875,7 @@ RZ_IPI RzCmdStatus rz_cmd_debug_modules_handler(RzCore *core, int argc, const ch
 
 // dmm.
 RZ_IPI RzCmdStatus rz_cmd_debug_current_modules_handler(RzCore *core, int argc, const char **argv, RzOutputMode mode) {
-	if (rz_core_file_is_core_dump(core)) {
+	if (rz_core_is_core_dump(core)) {
 		cmd_io_current_modules(core, mode);
 		return RZ_CMD_STATUS_OK;
 	}
@@ -886,7 +886,7 @@ RZ_IPI RzCmdStatus rz_cmd_debug_current_modules_handler(RzCore *core, int argc, 
 
 // dm-
 RZ_IPI RzCmdStatus rz_cmd_debug_deallocate_map_handler(RzCore *core, int argc, const char **argv) {
-	if (rz_core_file_is_core_dump(core)) {
+	if (rz_core_is_core_dump(core)) {
 		rz_cons_printf("Cannot deallocate maps in core dump mode\n");
 		return RZ_CMD_STATUS_ERROR;
 	}
@@ -908,7 +908,7 @@ RZ_IPI RzCmdStatus rz_cmd_debug_deallocate_map_handler(RzCore *core, int argc, c
 // dm=
 RZ_IPI RzCmdStatus rz_cmd_debug_list_maps_ascii_handler(RzCore *core, int argc, const char **argv) {
 	// dm= is oml= when file is a core dump
-	if (rz_core_file_is_core_dump(core)) {
+	if (rz_core_is_core_dump(core)) {
 		return rz_open_maps_list_ascii_handler(core, argc, argv);
 	}
 	CMD_CHECK_DEBUG_DEAD(core);
@@ -921,7 +921,7 @@ RZ_IPI RzCmdStatus rz_cmd_debug_list_maps_ascii_handler(RzCore *core, int argc, 
 // dm.
 RZ_IPI RzCmdStatus rz_cmd_debug_map_current_handler(RzCore *core, int argc, const char **argv, RzCmdStateOutput *state) {
 	// dm. is oml. when file is a core dump
-	if (rz_core_file_is_core_dump(core)) {
+	if (rz_core_is_core_dump(core)) {
 		return rz_open_maps_list_cur_handler(core, argc, argv, state);
 	}
 	CMD_CHECK_DEBUG_DEAD(core);
@@ -938,7 +938,7 @@ RZ_IPI RzCmdStatus rz_cmd_debug_map_current_handler(RzCore *core, int argc, cons
 // dmd
 RZ_IPI RzCmdStatus rz_cmd_debug_dump_maps_handler(RzCore *core, int argc, const char **argv) {
 
-	if (rz_core_file_is_core_dump(core)){
+	if (rz_core_is_core_dump(core)){
 		if (argc == 2) {
 			dump_io_maps(core, -1, argv[1]);
 		} else if (argc == 1) {
@@ -957,7 +957,7 @@ RZ_IPI RzCmdStatus rz_cmd_debug_dump_maps_handler(RzCore *core, int argc, const 
 
 // dmda
 RZ_IPI RzCmdStatus rz_cmd_debug_dump_maps_all_handler(RzCore *core, int argc, const char **argv) {
-	if (rz_core_file_is_core_dump(core)){
+	if (rz_core_is_core_dump(core)){
 		dump_io_maps(core, 0, NULL);
 		return RZ_CMD_STATUS_OK;
 	}
@@ -968,7 +968,7 @@ RZ_IPI RzCmdStatus rz_cmd_debug_dump_maps_all_handler(RzCore *core, int argc, co
 
 // dmdw
 RZ_IPI RzCmdStatus rz_cmd_debug_dump_maps_writable_handler(RzCore *core, int argc, const char **argv) {
-	if (rz_core_file_is_core_dump(core)){
+	if (rz_core_is_core_dump(core)){
 		dump_io_maps(core, RZ_PERM_RW, NULL);
 		return RZ_CMD_STATUS_OK;
 	}
@@ -996,7 +996,7 @@ RZ_IPI RzCmdStatus rz_cmd_debug_dmi_handler(RzCore *core, int argc, const char *
 
 	if (argc == 1) {
 		// Effectively an alias for 'dmm'
-		if (rz_core_file_is_core_dump(core)){
+		if (rz_core_is_core_dump(core)){
 			cmd_io_modules(core, state);
 			rz_cmd_state_output_print(state);
 			rz_cons_flush();
@@ -1014,7 +1014,7 @@ RZ_IPI RzCmdStatus rz_cmd_debug_dmi_handler(RzCore *core, int argc, const char *
 	RzCoreBinFilter filter = { .offset = UT64_MAX, .name = sym_name };
 	int action = RZ_CORE_BIN_ACC_SYMBOLS;
 	
-	if (rz_core_file_is_core_dump(core)){
+	if (rz_core_is_core_dump(core)){
 		RzIOMap *map = get_io_map_from_lib_name(core, lib_name);
 		if (!map) {
 			RZ_LOG_ERROR("Failed to get map from %s\n", lib_name);
@@ -1048,7 +1048,7 @@ RZ_IPI RzCmdStatus rz_cmd_debug_dmi_handler(RzCore *core, int argc, const char *
 RZ_IPI RzCmdStatus rz_cmd_debug_dmi_all_handler(RzCore *core, int argc, const char **argv, RzCmdStateOutput *state) {
 	if (argc == 1) {
 		// Effectively an alias for 'dmm'
-		if (rz_core_file_is_core_dump(core)){
+		if (rz_core_is_core_dump(core)){
 			cmd_io_modules(core, state);
 			rz_cmd_state_output_print(state);
 			rz_cons_flush();
@@ -1064,7 +1064,7 @@ RZ_IPI RzCmdStatus rz_cmd_debug_dmi_all_handler(RzCore *core, int argc, const ch
 	RzCoreBinFilter filter = { .offset = UT64_MAX, .name = NULL };
 	int action = RZ_CORE_BIN_ACC_ALL & ~RZ_CORE_BIN_ACC_INFO;
 
-	if (rz_core_file_is_core_dump(core)){
+	if (rz_core_is_core_dump(core)){
 		RzIOMap *map = get_io_map_from_lib_name(core, lib_name);
 		if (!map) {
 			RZ_LOG_ERROR("Failed to get map from %s\n", lib_name);
@@ -1140,7 +1140,7 @@ RZ_IPI RzCmdStatus rz_cmd_debug_dmi_closest_handler(RzCore *core, int argc, cons
 
 // dmp
 RZ_IPI RzCmdStatus rz_debug_memory_permission_handler(RzCore *core, int argc, const char **argv) {
-	if (rz_core_file_is_core_dump(core)) {
+	if (rz_core_is_core_dump(core)) {
 		rz_cons_printf("Cannot change memory permissions in core dump mode\n");
 		return RZ_CMD_STATUS_ERROR;
 	}
@@ -1194,7 +1194,7 @@ RZ_IPI RzCmdStatus rz_cmd_debug_dmS_handler(RzCore *core, int argc, const char *
 		}
 	}
 
-	if (rz_core_file_is_core_dump(core)) {
+	if (rz_core_is_core_dump(core)) {
 		RzPVector *maps = rz_io_modules_list(core);
 		void **it;
 		rz_pvector_foreach (maps, it) {
@@ -1267,7 +1267,7 @@ RZ_IPI RzCmdStatus rz_cmd_debug_dmS_handler(RzCore *core, int argc, const char *
 
 // dml
 RZ_IPI RzCmdStatus rz_cmd_debug_dml_handler(RzCore *core, int argc, const char **argv) {
-	if (rz_core_file_is_core_dump(core)) {
+	if (rz_core_is_core_dump(core)) {
 		rz_cons_printf("Cannot load into memory in core dump mode\n");
 		return RZ_CMD_STATUS_ERROR;
 	}
@@ -1302,7 +1302,7 @@ RZ_IPI RzCmdStatus rz_cmd_debug_dml_handler(RzCore *core, int argc, const char *
 
 // dmL
 RZ_IPI RzCmdStatus rz_cmd_debug_dmL_handler(RzCore *core, int argc, const char **argv) {
-	if (rz_core_file_is_core_dump(core)) {
+	if (rz_core_is_core_dump(core)) {
 		rz_cons_printf("Cannot allocate maps in core dump mode\n");
 		return RZ_CMD_STATUS_ERROR;
 	}
@@ -1328,7 +1328,7 @@ RZ_IPI RzCmdStatus rz_cmd_debug_heap_jemalloc_a_handler(RzCore *core, int argc, 
 		return rz_heap_jemalloc_cmd_a(core, has_specified_arena, arena_addr);
 	}
 
-	if (!rz_core_file_is_core_dump(core)) {
+	if (!rz_core_is_core_dump(core)) {
 		CMD_CHECK_DEBUG_DEAD(core);
 	}
 	return rz_heap_jemalloc_cmd_a(core, has_specified_arena, 0);
