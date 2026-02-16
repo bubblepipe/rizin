@@ -173,3 +173,20 @@ Extent @ 0x7f4550216500
   Size: 0x1000
 EOF
 RUN
+
+
+NAME=dmxa/dmxb/dmxc with jemalloc 4.5.0 core dump (linux-aarch64-4k_page)
+FILE=bins/heap/segfault-jemalloc4.5.0-aarch64-core
+CMDS=<<EOF
+!mkdir -p /run/host_virtiofs/Users/bubblepipe/repo/rizin/test/bins/heap/
+!cp bins/heap/segfault-jemalloc4.5.0-aarch64 /run/host_virtiofs/Users/bubblepipe/repo/rizin/test/bins/heap/
+dmxa~narena
+dmxb~0xffffa6e00140
+dmxc~Chunk
+EOF
+EXPECT=<<EOF
+narenas : 32
+  arenas[0]: @ 0xffffa6e00140 {
+   Chunk - start: 0xffffa6c00000, end: 0xffffa6e00000, size: 0x00200000
+EOF
+RUN

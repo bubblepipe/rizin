@@ -357,7 +357,7 @@ static void jemalloc_print_narenas_450(RzCore *core, bool has_specified_addr, ut
 
 	if (!has_specified_addr) {
 		if (rz_resolve_jemalloc(core, "narenas_total", &symaddr)) {
-			if (!read_ptr_at(core->io, symaddr, &narenas, config->ptr_size)) {
+			if (!read_ptr_at(core->io, symaddr, &narenas, 4)) {
 				RZ_LOG_ERROR("Failed to read narenas_total\n");
 				return;
 			}
@@ -876,7 +876,7 @@ static void jemalloc_print_narenas_530(RzCore *core, bool has_specified_addr, ut
 	if (!has_specified_addr) { // no args, list all arenas
 		if (rz_resolve_jemalloc(core, "narenas_total", &symaddr)) {
 			RZ_LOG_DEBUG("symaddr : %" PFMT64d "\n", symaddr);
-			if (!read_ptr_at(core->io, symaddr, &narenas, config->ptr_size)) {
+			if (!read_ptr_at(core->io, symaddr, &narenas, 4)) {
 				RZ_LOG_ERROR("Failed to read narenas_total\n");
 				return;
 			}
