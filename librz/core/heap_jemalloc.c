@@ -66,15 +66,16 @@ static bool rz_resolve_jemalloc(RzCore *core, const char *symname, ut64 *symbol)
 		void **it;
 		RzPVector *io_maps = rz_io_maps(core->io);
 		rz_pvector_foreach (io_maps, it) {
-			RzIOMap *map = *it;
-			const char *path = rz_core_io_map_file_path(map);
+			RzIOMap *io_map = *it;
+			const char *path = rz_core_io_map_file_path(io_map);
+
 			if (!rz_file_exists(path)) {
 				continue;
 			}
 
-			// Find the lowest map address for this file and check for duplicates
+			// find the lowest map address for this file, for base_addr
 			bool already_processed = false;
-			ut64 base_addr = map->itv.addr;
+			ut64 base_addr = io_map->itv.addr;
 			void **it2;
 			rz_pvector_foreach (io_maps, it2) {
 				RzIOMap *m2 = *it2;

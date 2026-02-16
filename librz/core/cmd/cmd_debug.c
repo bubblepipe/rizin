@@ -1338,15 +1338,14 @@ RZ_IPI RzCmdStatus rz_cmd_debug_heap_jemalloc_a_handler(RzCore *core, int argc, 
 RZ_IPI RzCmdStatus rz_cmd_debug_heap_jemalloc_b_handler(RzCore *core, int argc, const char **argv) {
 	bool has_specified_arena = argc > 1 && RZ_STR_ISNOTEMPTY(argv[1]);
 	bool has_bin_info = argc > 2 && RZ_STR_ISNOTEMPTY(argv[2]);
-	ut64 arena_addr = 0;
-	ut64 bin_info_addr = 0;
 
-	if (!has_specified_arena) {
-		CMD_CHECK_DEBUG_DEAD(core);
-	} else if (!has_bin_info) {
-		RZ_LOG_ERROR("Usage: dmxb <arena_addr> <bin_info_addr>\n");
-		return RZ_CMD_STATUS_ERROR;
-	} else {
+	if (has_specified_arena) {
+		ut64 arena_addr = 0;
+		ut64 bin_info_addr = 0;
+		if (!has_bin_info) {
+			RZ_LOG_ERROR("Usage: dmxb <arena_addr> <bin_info_addr>\n");
+			return RZ_CMD_STATUS_ERROR;
+		}
 		if (!rz_num_is_valid_input(core->num, argv[1])) {
 			RZ_LOG_ERROR("Invalid arena address '%s'\n", argv[1]);
 			return RZ_CMD_STATUS_ERROR;
@@ -1357,43 +1356,53 @@ RZ_IPI RzCmdStatus rz_cmd_debug_heap_jemalloc_b_handler(RzCore *core, int argc, 
 		}
 		arena_addr = rz_num_math(core->num, argv[1]);
 		bin_info_addr = rz_num_math(core->num, argv[2]);
+
+		return rz_heap_jemalloc_cmd_b(core, has_specified_arena, arena_addr, has_bin_info, bin_info_addr);
 	}
 
-	return rz_heap_jemalloc_cmd_b(core, has_specified_arena, arena_addr, has_bin_info, bin_info_addr);
+	if (!rz_core_is_core_dump(core)) {
+		CMD_CHECK_DEBUG_DEAD(core);
+	}
+
+	return rz_heap_jemalloc_cmd_b(core, has_specified_arena, 0, has_bin_info, 0);
 }
 
 // "dmxc"
 RZ_IPI RzCmdStatus rz_cmd_debug_heap_jemalloc_c_handler(RzCore *core, int argc, const char **argv) {
 	bool has_specified_arena = argc > 1 && RZ_STR_ISNOTEMPTY(argv[1]);
-	ut64 arena_addr = 0;
 
-	if (!has_specified_arena) {
-		CMD_CHECK_DEBUG_DEAD(core);
-	} else if (!rz_num_is_valid_input(core->num, argv[1])) {
-		RZ_LOG_ERROR("Invalid arena address '%s'\n", argv[1]);
-		return RZ_CMD_STATUS_ERROR;
-	} else {
-		arena_addr = rz_num_math(core->num, argv[1]);
+	if (has_specified_arena) {
+		if (!rz_num_is_valid_input(core->num, argv[1])) {
+			RZ_LOG_ERROR("Invalid arena address '%s'\n", argv[1]);
+			return RZ_CMD_STATUS_ERROR;
+		}
+		ut64 arena_addr = rz_num_math(core->num, argv[1]);
+		return rz_heap_jemalloc_cmd_c(core, has_specified_arena, arena_addr);
 	}
 
-	return rz_heap_jemalloc_cmd_c(core, has_specified_arena, arena_addr);
+	if (!rz_core_is_core_dump(core)) {
+		CMD_CHECK_DEBUG_DEAD(core);
+	}
+	return rz_heap_jemalloc_cmd_c(core, has_specified_arena, 0);
 }
 
 // "dmxe" - Find extent for malloc address
 RZ_IPI RzCmdStatus rz_cmd_debug_heap_jemalloc_e_handler(RzCore *core, int argc, const char **argv) {
 	bool has_addr = argc > 1 && RZ_STR_ISNOTEMPTY(argv[1]);
-	ut64 lookup_addr = 0;
 
-	if (!has_addr) {
-		CMD_CHECK_DEBUG_DEAD(core);
-	} else if (!rz_num_is_valid_input(core->num, argv[1])) {
-		RZ_LOG_ERROR("Invalid address '%s'\n", argv[1]);
-		return RZ_CMD_STATUS_ERROR;
-	} else {
-		lookup_addr = rz_num_math(core->num, argv[1]);
+	if (has_addr) {
+		if (!rz_num_is_valid_input(core->num, argv[1])) {
+			RZ_LOG_ERROR("Invalid address '%s'\n", argv[1]);
+			return RZ_CMD_STATUS_ERROR;
+		}
+		ut64 lookup_addr = rz_num_math(core->num, argv[1]);
+		return rz_heap_jemalloc_cmd_e(core, has_addr, lookup_addr);
 	}
 
-	return rz_heap_jemalloc_cmd_e(core, has_addr, lookup_addr);
+	if (!rz_core_is_core_dump(core)) {
+		CMD_CHECK_DEBUG_DEAD(core);
+	}
+	return rz_heap_jemalloc_cmd_e(core, has_addr, 0);
 }
 
 // "dmxei" - Display extent info
